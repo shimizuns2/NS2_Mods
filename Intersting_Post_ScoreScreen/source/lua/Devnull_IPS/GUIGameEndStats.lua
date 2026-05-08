@@ -46,7 +46,6 @@ local function round(number, decimals)
         else
             number = number % 1 >= 0.5 and math.ceil(number) or math.floor(number)
         end
-
         return tostring(number)
     else
         return "NaN"
@@ -3189,13 +3188,14 @@ function GUIGameEndStats:BuildTopPlayersGraph()
                 end
             )
             TopSDmgPlayer = playerData[1].playerData
-            local rtAmount = 0
+            local rtAmount = "NaN"
             if TopSDmgPlayer.isMarine then
                 topScoreLogoTexture = kMarineStatsLogo
-                rtAmount = roundNumber(playerData[1].Value / (kExtractorHealth + kExtractorArmor), 1)
+                rtAmount = round(playerData[1].Value / (kHarvesterHealth + kHarvesterArmor), 1)
+
             else
                 topScoreLogoTexture = kAlienStatsLogo
-                rtAmount = roundNumber(playerData[1].Value / (kHarvesterHealth + kHarvesterArmor), 1)
+                rtAmount = round(playerData[1].Value / (kExtractorHealth + kExtractorArmor), 1)
             end
             local TopSDmgPlayerCard = self:CreateGraphicHeader("Top Resource Tower", bgColor, topScoreLogoTexture, Vector(10, 10, 0), kLogoSize.x, kLogoSize.y)
             TopSDmgPlayerCard.rows = {}
