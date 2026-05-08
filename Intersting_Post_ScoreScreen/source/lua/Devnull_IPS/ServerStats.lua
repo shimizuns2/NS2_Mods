@@ -1399,7 +1399,7 @@ function StatsUI_RegisterTSS(TechName, msg)
 		end
 
 		if TechName == "alienRtDamage" then
-			STATS_ClientStats[msg.steamId]["last"].alienRtDamage = STATS_ClientStats[msg.steamId]["last"].medsReceived + msg.Value
+			STATS_ClientStats[msg.steamId]["last"].alienRtDamage = STATS_ClientStats[msg.steamId]["last"].alienRtDamage + msg.Value
 		end
 	end
 	--print("TechName: " .. TechName)
