@@ -1,0 +1,9 @@
+local Build = Shared.GetBuildNumber()
+if Build <= 345 then
+	modEntry = {
+		FileHooks = "lua/Devnull_Optimizations/Filehooks.lua",
+		Priority = 2
+	}
+else
+    modEntry = {} --avoid console error
+end

@@ -1,4 +1,4 @@
-name        = "D&D - Interesting Score Screen"
+name        = "Devnull - Interesting Score Screen"
 source_dir  = "source"
 output_dir  = "output"
 description = [=[Adding Top Players to score screen based on:

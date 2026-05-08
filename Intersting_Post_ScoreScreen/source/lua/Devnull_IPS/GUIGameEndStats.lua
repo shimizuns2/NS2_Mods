@@ -10,6 +10,9 @@
 -- ========= For more information, visit us at http://www.unknownworlds.com =====================
 class "GUIGameEndStats"(GUIScript)
 
+local zlib = require("zlib")
+local json = require("json")
+
 Script.Load("lua/graphs/LineGraph.lua")
 Script.Load("lua/graphs/ComparisonBarGraph.lua")
 Script.Load("lua/NS2Utility.lua")
@@ -69,10 +72,6 @@ local function roundNumber(number, decimals)
     end
 end
 
-local function ahumanNumber(i)
-    return tostring(i):reverse():gsub("%d%d%d", "%1,"):reverse():gsub("^,", "")
-end
-
 local function humanNumber(number)
     if number and IsNumber(number) then
         if number > 1000000 then
@@ -94,36 +93,38 @@ local function humanNumber(number)
 end
 
 -- To avoid printing 200.00 or things like that
-local function printNum(number)
+local function printNumWithDecimals(number, decimals)
     if number and IsNumber(number) then
-        if number == math.floor(number) then
+        if decimals == 0 or number == math.floor(number) then
             return string.format("%d", number)
         else
-            return string.format("%.2f", number)
+            return string.format("%." .. decimals .. "f", number)
         end
     else
         return "NaN"
     end
 end
 
-local function printNum1(number)
-    if number and IsNumber(number) then
-        if number == math.floor(number) then
-            return string.format("%d", number)
-        else
-            return string.format("%.1f", number)
-        end
-    else
-        return "NaN"
-    end
+local printNum = function(number)
+    return printNumWithDecimals(number, 2)
+end
+local printNum1 = function(number)
+    return printNumWithDecimals(number, 1)
+end
+local printNum2 = function(number)
+    return printNumWithDecimals(number, 2)
 end
 
-local function printNum2(number)
-    if number and IsNumber(number) then
-        return string.format("%.2f", number)
-    else
-        return "NaN"
-    end
+function CompressTable(tbl)
+    local jsonData = json.encode(tbl)
+    local deflater = zlib.deflate()
+    return deflater(jsonData, "finish")
+end
+
+function DecompressToTable(data)
+    local inflater = zlib.inflate()
+    local jsonData = inflater(data, "finish")
+    return json.decode(jsonData)
 end
 
 local function dump(o)
@@ -287,18 +288,12 @@ local function estimateHiveSkillGraph()
         return
     end
 
-    table.sort(
-        teams[1],
-        function(a, b)
-            return a.minutesPlaying > b.minutesPlaying
-        end
-    )
-    table.sort(
-        teams[2],
-        function(a, b)
-            return a.minutesPlaying > b.minutesPlaying
-        end
-    )
+    table.sort(teams[1], function(a, b)
+        return a.minutesPlaying > b.minutesPlaying
+    end)
+    table.sort(teams[2], function(a, b)
+        return a.minutesPlaying > b.minutesPlaying
+    end)
 
     -- greedy knapsack
     local gameLength = miscDataTable.gameLengthMinutes
@@ -309,25 +304,19 @@ local function estimateHiveSkillGraph()
             for i, player in ipairs(team) do
                 if player and player.minutesPlaying then
                     if left - player.minutesPlaying >= 0 then
-                        table.insert(
-                            hiveSkillGraphTable,
-                            {
-                                gameMinute = gameLength - left,
-                                joined = true,
-                                teamNumber = player.teamNumber,
-                                steamId = player.steamId
-                            }
-                        )
+                        table.insert(hiveSkillGraphTable, {
+                            gameMinute = gameLength - left,
+                            joined = true,
+                            teamNumber = player.teamNumber,
+                            steamId = player.steamId
+                        })
                         left = left - player.minutesPlaying
-                        table.insert(
-                            hiveSkillGraphTable,
-                            {
-                                gameMinute = gameLength - left,
-                                joined = false,
-                                teamNumber = player.teamNumber,
-                                steamId = player.steamId
-                            }
-                        )
+                        table.insert(hiveSkillGraphTable, {
+                            gameMinute = gameLength - left,
+                            joined = false,
+                            teamNumber = player.teamNumber,
+                            steamId = player.steamId
+                        })
                         -- allow some time for others to react and join instead
                         left = left - 10 / 60
                         team[i] = {}
@@ -449,7 +438,8 @@ function GUIGameEndStats:CreateTeamBackground(teamNumber)
     item.teamNameTextShadow:SetAnchor(GUIItem.Left, GUIItem.Top)
     item.teamNameTextShadow:SetText(teamName)
     item.teamNameTextShadow:SetTextAlignmentY(GUIItem.Align_Center)
-    item.teamNameTextShadow:SetPosition(Vector(kLogoSize.x + kTeamNameOffset + kTextShadowOffset, kTitleSize.y / 2 + kTextShadowOffset, 0))
+    item.teamNameTextShadow:SetPosition(Vector(kLogoSize.x + kTeamNameOffset + kTextShadowOffset,
+        kTitleSize.y / 2 + kTextShadowOffset, 0))
     item.teamNameTextShadow:SetLayer(kGUILayerMainMenu)
     item.background:AddChild(item.teamNameTextShadow)
 
@@ -525,7 +515,8 @@ function GUIGameEndStats:CreateTeamBackground(teamNumber)
     return item
 end
 
-local function CreateScoreboardRow(container, bgColor, textColor, playerName, kills, assists, deaths, acc, score, pdmg, sdmg, timeBuilding, timePlayed, timeComm, steamId, isRookie, hiveSkill)
+local function CreateScoreboardRow(container, bgColor, textColor, playerName, kills, assists, deaths, acc, score, pdmg,
+    sdmg, timeBuilding, timePlayed, timeComm, steamId, isRookie, hiveSkill)
     local containerSize = container:GetSize()
     container:SetSize(Vector(containerSize.x, containerSize.y + kRowSize.y, 0))
 
@@ -557,13 +548,15 @@ local function CreateScoreboardRow(container, bgColor, textColor, playerName, ki
         item.skillIcon:SetIsVisible(true)
         item.skillIcon:SetPosition(Vector(0, -GUILinearScale(10), 0))
         item.skillIcon:SetLayer(kGUILayerMainMenu)
-        item.skillIcon.tooltip = string.format(Locale.ResolveString("SKILLTIER_TOOLTIP"), Locale.ResolveString(skillTierName), skillTier)
+        item.skillIcon.tooltip = string.format(Locale.ResolveString("SKILLTIER_TOOLTIP"),
+            Locale.ResolveString(skillTierName), skillTier)
 
         if not skillIconOverrideSettings then -- Change the skill icon's shader to the one that will animate.
             item.skillIcon:SetTexture(kPlayerSkillIconTexture)
             item.skillIcon:SetShader("shaders/GUIBasic.surface_shader")
             if item.hiveSkillTier > 0 then
-                item.skillIcon:SetTexturePixelCoordinates(0, (item.hiveSkillTier + 2) * 32, 100, ((item.hiveSkillTier + 2) + 1) * 32 - 1)
+                item.skillIcon:SetTexturePixelCoordinates(0, (item.hiveSkillTier + 2) * 32, 100,
+                    ((item.hiveSkillTier + 2) + 1) * 32 - 1)
             else
                 item.skillIcon:SetTexturePixelCoordinates(0, 0, 100, 31)
             end
@@ -598,7 +591,8 @@ local function CreateScoreboardRow(container, bgColor, textColor, playerName, ki
     item.playerName:SetLayer(kGUILayerMainMenu)
     item.background:AddChild(item.playerName)
 
-    local playerNameLength = item.playerName:GetTextWidth(playerName or "") * item.playerName:GetScale().x + GUILinearScale(5)
+    local playerNameLength = item.playerName:GetTextWidth(playerName or "") * item.playerName:GetScale().x +
+                                 GUILinearScale(5)
 
     if timeComm then
         item.commIcon = GUIManager:CreateGraphicItem()
@@ -717,7 +711,8 @@ local function CreateScoreboardRow(container, bgColor, textColor, playerName, ki
     item.acc:SetLayer(kGUILayerMainMenu)
     item.background:AddChild(item.acc)
 
-    xOffset = xOffset - kItemSize - ConditionalValue(avgAccTable.marineOnosAcc == -1, kItemPaddingSmall, kItemPaddingMediumLarge) * 2
+    xOffset = xOffset - kItemSize -
+                  ConditionalValue(avgAccTable.marineOnosAcc == -1, kItemPaddingSmall, kItemPaddingMediumLarge) * 2
 
     item.deaths = GUIManager:CreateTextItem()
     item.deaths:SetStencilFunc(GUIItem.NotEqual)
@@ -871,7 +866,8 @@ function GUIGameEndStats:CreateGraphicHeader(text, color, logoTexture, logoCoord
 end
 
 -- ToDo: eal
-function GUIGameEndStats:CreateEALGraphicHeader(text, color, logoTexture, logoCoords, logoSizeX, logoSizeY, buyText, lostText)
+function GUIGameEndStats:CreateEALGraphicHeader(text, color, logoTexture, logoCoords, logoSizeX, logoSizeY, buyText,
+    lostText)
     local item = {}
 
     item.background = GUIManager:CreateGraphicItem()
@@ -973,7 +969,8 @@ function GUIGameEndStats:CreateEALGraphicHeader(text, color, logoTexture, logoCo
     item.textBuyShadow:SetText(tostring(buyText))
     item.textBuyShadow:SetTextAlignmentX(GUIItem.Right)
     item.textBuyShadow:SetTextAlignmentY(GUIItem.Align_Center)
-    item.textBuyShadow:SetPosition(Vector(GUILinearScale(ThisPos - 2.5) + GUILinearScale(20) + kTextShadowOffsetMini, GUILinearScale(-17) + kTextShadowOffsetMini, 0))
+    item.textBuyShadow:SetPosition(Vector(GUILinearScale(ThisPos - 2.5) + GUILinearScale(20) + kTextShadowOffsetMini,
+        GUILinearScale(-17) + kTextShadowOffsetMini, 0))
     item.textBuyShadow:SetLayer(kGUILayerMainMenu)
     item.background:AddChild(item.textBuyShadow)
 
@@ -1001,7 +998,8 @@ function GUIGameEndStats:CreateEALGraphicHeader(text, color, logoTexture, logoCo
     item.textLostShadow:SetText(tostring(lostText))
     item.textLostShadow:SetTextAlignmentX(GUIItem.Left)
     item.textLostShadow:SetTextAlignmentY(GUIItem.Align_Center)
-    item.textLostShadow:SetPosition(Vector(GUILinearScale(ThisPos + 2.5) + GUILinearScale(20) + kTextShadowOffsetMini, GUILinearScale(-17) + kTextShadowOffsetMini, 0))
+    item.textLostShadow:SetPosition(Vector(GUILinearScale(ThisPos + 2.5) + GUILinearScale(20) + kTextShadowOffsetMini,
+        GUILinearScale(-17) + kTextShadowOffsetMini, 0))
     item.textLostShadow:SetLayer(kGUILayerMainMenu)
     item.background:AddChild(item.textLostShadow)
 
@@ -1053,12 +1051,9 @@ local function CreateTssItem(container, dataTable, decimals, Label, Icon, IconVe
         tssItem.steamId = _
         table.insert(playerData, tssItem)
     end
-    table.sort(
-        playerData,
-        function(a, b)
-            return a.Value > b.Value
-        end
-    )
+    table.sort(playerData, function(a, b)
+        return a.Value > b.Value
+    end)
 
     local item = {}
     local StartSpacing = GUILinearScale(150)
@@ -1079,7 +1074,8 @@ local function CreateTssItem(container, dataTable, decimals, Label, Icon, IconVe
     item.labelTextShadow:SetText(Label)
     item.labelTextShadow:SetTextAlignmentX(GUIItem.Align_Center)
     item.labelTextShadow:SetTextAlignmentY(GUIItem.Align_Center)
-    item.labelTextShadow:SetPosition(Vector(ThisPos - 2.5 + GUILinearScale(AvatarSize / 2) + kTextShadowOffsetMini, GUILinearScale(17) + GUILinearScale(kTextShadowOffsetMini), 0))
+    item.labelTextShadow:SetPosition(Vector(ThisPos - 2.5 + GUILinearScale(AvatarSize / 2) + kTextShadowOffsetMini,
+        GUILinearScale(17) + GUILinearScale(kTextShadowOffsetMini), 0))
     item.labelTextShadow:SetLayer(kGUILayerMainMenu)
     container:AddChild(item.labelTextShadow)
 
@@ -1097,7 +1093,7 @@ local function CreateTssItem(container, dataTable, decimals, Label, Icon, IconVe
     item.labelText.tooltip = toolTip
     container:AddChild(item.labelText)
 
-    --Build text string
+    -- Build text string
     local dataText = ""
     local i = 0
     for _, tData in pairs(playerData) do
@@ -1108,9 +1104,13 @@ local function CreateTssItem(container, dataTable, decimals, Label, Icon, IconVe
             dataText = dataText .. string.char(10)
         end
         if Label == "Node Clearer" then
-            dataText = dataText .. "(" .. tostring(humanNumber(tData.Value)) .. "/" .. roundNumber(tData.Value / (kHarvesterHealth + kHarvesterArmor), 1) .. "RTs) " .. tData.playerName
+            dataText = dataText .. "(" .. tostring(humanNumber(tData.Value)) .. "/" ..
+                           roundNumber(tData.Value / (kHarvesterHealth + kHarvesterArmor), 1) .. "RTs) " ..
+                           tData.playerName
         elseif Label == "Resource Eater" then
-                dataText = dataText .. "(" .. tostring(humanNumber(tData.Value)) .. "/" .. roundNumber(tData.Value / (kExtractorHealth + kExtractorArmor), 1) .. "RTs) " .. tData.playerName
+            dataText = dataText .. "(" .. tostring(humanNumber(tData.Value)) .. "/" ..
+                           roundNumber(tData.Value / (kExtractorHealth + kExtractorArmor), 1) .. "RTs) " ..
+                           tData.playerName
         else
             dataText = dataText .. "(" .. tostring(humanNumber(tData.Value)) .. ") " .. tData.playerName
         end
@@ -1142,7 +1142,8 @@ local function CreateTssItem(container, dataTable, decimals, Label, Icon, IconVe
     item.textBuyShadow:SetText(playerData[1].playerName)
     item.textBuyShadow:SetTextAlignmentX(GUIItem.Align_Center)
     item.textBuyShadow:SetTextAlignmentY(GUIItem.Align_Center)
-    item.textBuyShadow:SetPosition(Vector(ThisPos - 2.5 + (GUILinearScale(AvatarSize / 2)) + kTextShadowOffsetMini, -GUILinearScale(13) + GUILinearScale(kTextShadowOffsetMini), 0))
+    item.textBuyShadow:SetPosition(Vector(ThisPos - 2.5 + (GUILinearScale(AvatarSize / 2)) + kTextShadowOffsetMini,
+        -GUILinearScale(13) + GUILinearScale(kTextShadowOffsetMini), 0))
     item.textBuyShadow:SetLayer(kGUILayerMainMenu)
     container:AddChild(item.textBuyShadow)
 
@@ -1164,7 +1165,8 @@ local function CreateTssItem(container, dataTable, decimals, Label, Icon, IconVe
 end
 
 -- ToDo: eal
-local function CreateEalIcon(container, buyCount, lostCount, Texture, TextureVector, TextureSize, IconNr, forMarine, sTooltip)
+local function CreateEalIcon(container, buyCount, lostCount, Texture, TextureVector, TextureSize, IconNr, forMarine,
+    sTooltip)
     local containerSize = container:GetSize()
 
     local item = {}
@@ -1205,7 +1207,8 @@ local function CreateEalIcon(container, buyCount, lostCount, Texture, TextureVec
         item.textBuyShadow:SetText(tostring(buyCount))
         item.textBuyShadow:SetTextAlignmentX(GUIItem.Right)
         item.textBuyShadow:SetTextAlignmentY(GUIItem.Align_Center)
-        item.textBuyShadow:SetPosition(Vector(ThisPos - 2.5 + GUILinearScale(item.icon:GetSize().x / 2) + kTextShadowOffsetMini, GUILinearScale(-17) + kTextShadowOffsetMini, 0))
+        item.textBuyShadow:SetPosition(Vector(ThisPos - 2.5 + GUILinearScale(item.icon:GetSize().x / 2) +
+                                                  kTextShadowOffsetMini, GUILinearScale(-17) + kTextShadowOffsetMini, 0))
         item.textBuyShadow:SetLayer(kGUILayerMainMenu)
         container:AddChild(item.textBuyShadow)
 
@@ -1217,7 +1220,8 @@ local function CreateEalIcon(container, buyCount, lostCount, Texture, TextureVec
         item.textBuy:SetAnchor(GUIItem.Left, GUIItem.Bottom)
         item.textBuy:SetTextAlignmentX(GUIItem.Right)
         item.textBuy:SetTextAlignmentY(GUIItem.Align_Center)
-        item.textBuy:SetPosition(Vector(ThisPos - 2.5 + GUILinearScale(item.icon:GetSize().x / 2), GUILinearScale(-17), 0))
+        item.textBuy:SetPosition(Vector(ThisPos - 2.5 + GUILinearScale(item.icon:GetSize().x / 2), GUILinearScale(-17),
+            0))
         item.textBuy:SetText(tostring(buyCount))
         item.textBuy:SetLayer(kGUILayerMainMenu)
         container:AddChild(item.textBuy)
@@ -1231,7 +1235,8 @@ local function CreateEalIcon(container, buyCount, lostCount, Texture, TextureVec
         item.textLostShadow:SetText(tostring(lostCount))
         item.textLostShadow:SetTextAlignmentX(GUIItem.Left)
         item.textLostShadow:SetTextAlignmentY(GUIItem.Align_Center)
-        item.textLostShadow:SetPosition(Vector(ThisPos + 2.5 + GUILinearScale(item.icon:GetSize().x / 2) + kTextShadowOffsetMini, GUILinearScale(-17) + kTextShadowOffsetMini, 0))
+        item.textLostShadow:SetPosition(Vector(ThisPos + 2.5 + GUILinearScale(item.icon:GetSize().x / 2) +
+                                                   kTextShadowOffsetMini, GUILinearScale(-17) + kTextShadowOffsetMini, 0))
         item.textLostShadow:SetLayer(kGUILayerMainMenu)
         container:AddChild(item.textLostShadow)
 
@@ -1243,7 +1248,8 @@ local function CreateEalIcon(container, buyCount, lostCount, Texture, TextureVec
         item.textLost:SetAnchor(GUIItem.Left, GUIItem.Bottom)
         item.textLost:SetTextAlignmentX(GUIItem.Left)
         item.textLost:SetTextAlignmentY(GUIItem.Align_Center)
-        item.textLost:SetPosition(Vector(ThisPos + 2.5 + GUILinearScale(item.icon:GetSize().x / 2), GUILinearScale(-17), 0))
+        item.textLost:SetPosition(Vector(ThisPos + 2.5 + GUILinearScale(item.icon:GetSize().x / 2), GUILinearScale(-17),
+            0))
         item.textLost:SetText(tostring(lostCount))
         item.textLost:SetLayer(kGUILayerMainMenu)
         container:AddChild(item.textLost)
@@ -1343,7 +1349,8 @@ local function CreateTopPlayerMainRow(container, bgColor, textColor, PlayerObjec
     item.background:SetAnchor(GUIItem.Left, GUIItem.Top)
     item.background:SetPosition(Vector(kRowBorderSize, containerSize.y - kRowBorderSize, 0))
     item.background:SetLayer(kGUILayerMainMenu)
-    item.background:SetSize(Vector(kCardRowSize.x, containerSize.y + (kCardRowSize.y * 8) - kRowBorderSize - kRowBorderSize, 0))
+    item.background:SetSize(Vector(kCardRowSize.x,
+        containerSize.y + (kCardRowSize.y * 8) - kRowBorderSize - kRowBorderSize, 0))
 
     container:AddChild(item.background)
 
@@ -1524,7 +1531,8 @@ function GUIGameEndStats:CreateTechLogHeader(teamNumber, teamName)
     item.teamNameTextShadow:SetAnchor(GUIItem.Left, GUIItem.Top)
     item.teamNameTextShadow:SetText(teamName)
     item.teamNameTextShadow:SetTextAlignmentY(GUIItem.Align_Center)
-    item.teamNameTextShadow:SetPosition(Vector(kLogoSize.x + kTeamNameOffset + kTextShadowOffset, kTechLogTitleSize.y / 2 + kTextShadowOffset, 0))
+    item.teamNameTextShadow:SetPosition(Vector(kLogoSize.x + kTeamNameOffset + kTextShadowOffset,
+        kTechLogTitleSize.y / 2 + kTextShadowOffset, 0))
     item.teamNameTextShadow:SetLayer(kGUILayerMainMenu)
     item.background:AddChild(item.teamNameTextShadow)
 
@@ -1550,13 +1558,15 @@ function GUIGameEndStats:CreateTechLogHeader(teamNumber, teamName)
         item.commBadge:SetSize(Vector(100 * 0.7, 52 * 0.7, 0))
         item.commBadge:SetPosition(Vector(-(100 * 0.7), -((52 * 0.7) / 2), 0))
         item.commBadge:SetTexture(kCommSkillIconTexture) -- todo: com
-        local skillTier, skillTierName = GetPlayerSkillTier((teamNumber == 2 and commander.commanderSkillAlien or commander.commanderSkillMarine), isRookie)
+        local skillTier, skillTierName = GetPlayerSkillTier((teamNumber == 2 and commander.commanderSkillAlien or
+                                                                commander.commanderSkillMarine), isRookie)
         if skillTier > 0 then
             item.commBadge:SetTexturePixelCoordinates(0, (skillTier + 2) * 32, 52, 32 * (skillTier + 3))
         else
             item.commBadge:SetTexturePixelCoordinates(0, 0, 100, 31)
         end
-        item.commBadge.tooltip = string.format(Locale.ResolveString("SKILLTIER_TOOLTIP"), Locale.ResolveString(skillTierName), skillTier)
+        item.commBadge.tooltip = string.format(Locale.ResolveString("SKILLTIER_TOOLTIP"),
+            Locale.ResolveString(skillTierName), skillTier)
         table.insert(self.toolTipCards, item.commBadge)
         item.background:AddChild(item.commBadge)
 
@@ -1570,7 +1580,8 @@ function GUIGameEndStats:CreateTechLogHeader(teamNumber, teamName)
         item.commNameTextShadow:SetText(commander.playerName)
         item.commNameTextShadow:SetTextAlignmentY(GUIItem.Align_Center)
         item.commNameTextShadow:SetTextAlignmentX(GUIItem.Align_Max)
-        item.commNameTextShadow:SetPosition(Vector(-(kLogoSize.x + kTeamNameOffset + kTextShadowOffset), kTechLogTitleSize.y / 2 + kTextShadowOffset, 0))
+        item.commNameTextShadow:SetPosition(Vector(-(kLogoSize.x + kTeamNameOffset + kTextShadowOffset),
+            kTechLogTitleSize.y / 2 + kTextShadowOffset, 0))
         item.commNameTextShadow:SetLayer(kGUILayerMainMenu)
         item.background:AddChild(item.commNameTextShadow)
 
@@ -1628,7 +1639,8 @@ local function CreateKillGraphIcon(container, possition, techTable)
     return item.logo
 end
 
-local function CreateTechLogRow(container, bgColor, textColor, timeBuilt, techName, activeRTs, numRes, logoTexture, logoCoords, logoSizeX, logoSizeY, logoColor)
+local function CreateTechLogRow(container, bgColor, textColor, timeBuilt, techName, activeRTs, numRes, logoTexture,
+    logoCoords, logoSizeX, logoSizeY, logoColor)
     local containerSize = container:GetSize()
     container:SetSize(Vector(containerSize.x, containerSize.y + kTechLogRowSize.y, 0))
 
@@ -1729,7 +1741,8 @@ local function CreateTechLogRow(container, bgColor, textColor, timeBuilt, techNa
     return item
 end
 
-local function CreateCommStatsRow(container, bgColor, textColor, techName, accuracy, efficiency, refill, used, wasted, logoTexture, logoCoords, logoSizeX, logoSizeY, logoColor)
+local function CreateCommStatsRow(container, bgColor, textColor, techName, accuracy, efficiency, refill, used, wasted,
+    logoTexture, logoCoords, logoSizeX, logoSizeY, logoColor)
     local containerSize = container:GetSize()
     container:SetSize(Vector(containerSize.x, containerSize.y + kTechLogRowSize.y, 0))
 
@@ -1856,7 +1869,8 @@ end
 
 function GUIGameEndStats:SetPlayerCount(teamItem, playerCount)
     if playerCount and IsNumber(playerCount) then
-        local playerString = string.format("%d %s", playerCount, ConditionalValue(playerCount == 1, Locale.ResolveString("PLAYER"), Locale.ResolveString("PLAYERS")))
+        local playerString = string.format("%d %s", playerCount, ConditionalValue(playerCount == 1,
+            Locale.ResolveString("PLAYER"), Locale.ResolveString("PLAYERS")))
         teamItem.teamPlayerCountShadow:SetText(playerString)
         teamItem.teamPlayerCount:SetText(playerString)
     else
@@ -1921,7 +1935,7 @@ function GUIGameEndStats:LoadLastRoundStats()
                     balanceServer = true
                 end
 
-                --convert vanilla techIds into balancemod techIds
+                -- convert vanilla techIds into balancemod techIds
                 if balanceServer and vanillaStats then
                     for i, v in pairs(equipmentAndLifeformsLogTable) do
                         if v.techId > kTechId.JetpackTech and v.techId <= kTechId.DeathTrigger then
@@ -1932,7 +1946,7 @@ function GUIGameEndStats:LoadLastRoundStats()
                     end
                 end
 
-                --convert balance techIds into vanilla techIds
+                -- convert balance techIds into vanilla techIds
                 if not balanceServer and not vanillaStats then
                     for i, v in pairs(equipmentAndLifeformsLogTable) do
                         if v.techId > kTechId.JetpackTech and v.techId <= kTechId.DeathTrigger then
@@ -1972,14 +1986,9 @@ function GUIGameEndStats:SaveLastRoundStats()
 
         local savedFile = io.open(lastRoundFile, "w+")
         if savedFile then
-            savedFile:write(
-                json.encode(
-                    savedStats,
-                    {
-                        indent = true
-                    }
-                )
-            )
+            savedFile:write(json.encode(savedStats, {
+                indent = true
+            }))
             io.close(savedFile)
         end
         self.saved = true
@@ -2062,10 +2071,15 @@ function GUIGameEndStats:Initialize()
 
     self.team1UI = self:CreateTeamBackground(1)
     self.team1UI.playerRows = {}
-    table.insert(self.team1UI.playerRows, CreateScoreboardRow(self.team1UI.tableBackground, kHeaderRowColor, kMarineHeaderRowTextColor, "Player name", "K", "A", "D", ConditionalValue(avgAccTable.marineOnosAcc == -1, "Accuracy", "Acc. (No Onos)"), "Score", "Pl. dmg", "Str. dmg", "Build time", "Played"))
+    table.insert(self.team1UI.playerRows,
+        CreateScoreboardRow(self.team1UI.tableBackground, kHeaderRowColor, kMarineHeaderRowTextColor, "Player name",
+            "K", "A", "D", ConditionalValue(avgAccTable.marineOnosAcc == -1, "Accuracy", "Acc. (No Onos)"), "Score",
+            "Pl. dmg", "Str. dmg", "Build time", "Played"))
     self.team2UI = self:CreateTeamBackground(2)
     self.team2UI.playerRows = {}
-    table.insert(self.team2UI.playerRows, CreateScoreboardRow(self.team2UI.tableBackground, kHeaderRowColor, kAlienHeaderRowTextColor, "Player name", "K", "A", "D", "Accuracy", "Score", "Pl. dmg", "Str. dmg", "Build time", "Played"))
+    table.insert(self.team2UI.playerRows,
+        CreateScoreboardRow(self.team2UI.tableBackground, kHeaderRowColor, kAlienHeaderRowTextColor, "Player name", "K",
+            "A", "D", "Accuracy", "Score", "Pl. dmg", "Str. dmg", "Build time", "Played"))
 
     self.sliderBarBg = GUIManager:CreateGraphicItem()
     self.sliderBarBg:SetColor(Color(0, 0, 0, 0.5))
@@ -2298,7 +2312,6 @@ function GUIGameEndStats:Initialize()
     self.rtGraphTextShadow:SetLayer(kGUILayerMainMenu)
     self.background:AddChild(self.rtGraphTextShadow)
 
-
     -- commented out for LessNetworkData
     --[[
     self.presGraphTextShadow = GUIManager:CreateTextItem()
@@ -2487,6 +2500,15 @@ function GUIGameEndStats:Initialize()
     self.lostRTsComp:SetTitle("Lost RTs")
     self.lostRTsComp:GiveParent(self.background)
 
+    self.avgRTsComp = ComparisonBarGraph()
+    self.avgRTsComp:Initialize()
+    self.avgRTsComp:SetAnchor(GUIItem.Middle, GUIItem.Top)
+    self.avgRTsComp:SetSize(comparisonSize)
+    self.avgRTsComp:SetValues(0, 0)
+    self.avgRTsComp:SetStencilFunc(GUIItem.NotEqual)
+    self.avgRTsComp:SetTitle("Average RTs")
+    self.avgRTsComp:GiveParent(self.background)
+
     self.killComparison = ComparisonBarGraph()
     self.killComparison:Initialize()
     self.killComparison:SetAnchor(GUIItem.Middle, GUIItem.Top)
@@ -2551,7 +2573,8 @@ function GUIGameEndStats:SetIsVisible(visible)
     -- Don't try to display it if there is no content visible
     local gameInfo = GetGameInfoEntity()
     local teamStatsVisible = gameInfo and gameInfo.showEndStatsTeamBreakdown
-    local visibleStats = teamStatsVisible and self.teamStatsTextShadow:GetIsVisible() or #self.statsCards > 0 or #self.rtGraphs > 0
+    local visibleStats = teamStatsVisible and self.teamStatsTextShadow:GetIsVisible() or #self.statsCards > 0 or
+                             #self.rtGraphs > 0
     if visible ~= self:GetIsVisible() and ((visible and visibleStats) or not visible) then
         self.background:SetIsVisible(visible)
         self.header:SetIsVisible(visible)
@@ -2619,7 +2642,8 @@ local function repositionStatsCards(self)
                 if index <= last3Row or remainingElems == 3 then
                     xPos = (relativeIndex - 2) * GUILinearScale(32) - cardSize * 1.5 + (relativeIndex - 1) * cardSize
                 elseif remainingElems == 2 then
-                    xPos = -cardSize + (2 - relativeIndex) * cardSize + ConditionalValue(relativeIndex == 1, 1, -1) * GUILinearScale(32)
+                    xPos = -cardSize + (2 - relativeIndex) * cardSize + ConditionalValue(relativeIndex == 1, 1, -1) *
+                               GUILinearScale(32)
                 else
                     xPos = -cardSize / 2
                 end
@@ -2645,22 +2669,30 @@ function GUIGameEndStats:RepositionStats()
     if self.team1UI.background:GetIsVisible() then
         if self.equipmentAndLifeformsTextShadow:GetIsVisible() then
             self.equipmentAndLifeformsTextShadow:SetPosition(Vector((kTitleSize.x - GUILinearScale(32)) / 2, yPos, 0))
-            self.topEalCards.Aliens.background:SetPosition(GUILinearScale(32) / 2, self.equipmentAndLifeformsTextShadow:GetPosition().y + GUILinearScale(32), 0)
-            self.topEalCards.Marines.background:SetPosition(GUILinearScale(32) / 2, self.topEalCards.Aliens.background:GetPosition().y + self.topEalCards.Aliens.background:GetSize().y, 0)
-            yPos = self.topEalCards.Marines.background:GetPosition().y + self.topEalCards.Marines.background:GetSize().y + GUILinearScale(16)
+            self.topEalCards.Aliens.background:SetPosition(GUILinearScale(32) / 2,
+                self.equipmentAndLifeformsTextShadow:GetPosition().y + GUILinearScale(32), 0)
+            self.topEalCards.Marines.background:SetPosition(GUILinearScale(32) / 2,
+                self.topEalCards.Aliens.background:GetPosition().y + self.topEalCards.Aliens.background:GetSize().y, 0)
+            yPos =
+                self.topEalCards.Marines.background:GetPosition().y + self.topEalCards.Marines.background:GetSize().y +
+                    GUILinearScale(16)
         end
         if self.TssTextShadow:GetIsVisible() then
             self.TssTextShadow:SetPosition(Vector((kTitleSize.x - GUILinearScale(32)) / 2, yPos, 0))
-            self.topTssCards.AlienItem.background:SetPosition(GUILinearScale(32) / 2, self.TssTextShadow:GetPosition().y + GUILinearScale(32), 0)
-            self.topTssCards.MarineItem.background:SetPosition(GUILinearScale(32) / 2, self.topTssCards.AlienItem.background:GetPosition().y + self.topTssCards.AlienItem.background:GetSize().y, 0)
-            yPos = self.topTssCards.MarineItem.background:GetPosition().y + self.topTssCards.MarineItem.background:GetSize().y + GUILinearScale(16)
+            self.topTssCards.AlienItem.background:SetPosition(GUILinearScale(32) / 2,
+                self.TssTextShadow:GetPosition().y + GUILinearScale(32), 0)
+            self.topTssCards.MarineItem.background:SetPosition(GUILinearScale(32) / 2, self.topTssCards.AlienItem
+                .background:GetPosition().y + self.topTssCards.AlienItem.background:GetSize().y, 0)
+            yPos = self.topTssCards.MarineItem.background:GetPosition().y +
+                       self.topTssCards.MarineItem.background:GetSize().y + GUILinearScale(16)
         end
         self.teamStatsTextShadow:SetPosition(Vector((kTitleSize.x - GUILinearScale(32)) / 2, yPos, 0))
         yPos = yPos + GUILinearScale(32)
         self.team1UI.background:SetPosition(Vector(GUILinearScale(16), yPos, 0))
         yPos = yPos + self.team1UI.tableBackground:GetSize().y + self.team1UI.background:GetSize().y
         self.team2UI.background:SetPosition(Vector(GUILinearScale(16), yPos, 0))
-        yPos = yPos + self.team2UI.tableBackground:GetSize().y + self.team2UI.background:GetSize().y + GUILinearScale(32)
+        yPos = yPos + self.team2UI.tableBackground:GetSize().y + self.team2UI.background:GetSize().y +
+                   GUILinearScale(32)
     end
 
     self.yourStatsTextShadow:SetPosition(Vector((kTitleSize.x - GUILinearScale(32)) / 2, yPos, 0))
@@ -2675,8 +2707,10 @@ function GUIGameEndStats:RepositionStats()
         self.techLogs[1].header.background:SetPosition(Vector(GUILinearScale(16), yPos, 0))
         self.techLogs[2].header.background:SetPosition(Vector(kTechLogTitleSize.x + GUILinearScale(16), yPos, 0))
 
-        local team1YSize = self.techLogs[1].header.background:GetSize().y + self.techLogs[1].header.tableBackground:GetSize().y
-        local team2YSize = self.techLogs[2].header.background:GetSize().y + self.techLogs[2].header.tableBackground:GetSize().y
+        local team1YSize = self.techLogs[1].header.background:GetSize().y +
+                               self.techLogs[1].header.tableBackground:GetSize().y
+        local team2YSize = self.techLogs[2].header.background:GetSize().y +
+                               self.techLogs[2].header.tableBackground:GetSize().y
 
         yPos = yPos + GUILinearScale(32) + math.max(team1YSize, team2YSize)
     end
@@ -2686,6 +2720,7 @@ function GUIGameEndStats:RepositionStats()
     self.rtGraph:SetIsVisible(showRTGraph)
     self.builtRTsComp:SetIsVisible(showRTGraph)
     self.lostRTsComp:SetIsVisible(showRTGraph)
+    self.avgRTsComp:SetIsVisible(showRTGraph)
     if showRTGraph then
         self.rtGraphTextShadow:SetPosition(Vector((kTitleSize.x - GUILinearScale(32)) / 2, yPos, 0))
         yPos = yPos + GUILinearScale(32)
@@ -2697,6 +2732,9 @@ function GUIGameEndStats:RepositionStats()
         yPos = yPos + comparisonSize.y + GUILinearScale(48)
 
         self.lostRTsComp:SetPosition(Vector((kTitleSize.x - comparisonSize.x - rtGraphPadding) / 2, yPos, 0))
+        yPos = yPos + comparisonSize.y + GUILinearScale(48)
+
+        self.avgRTsComp:SetPosition(Vector((kTitleSize.x - comparisonSize.x - rtGraphPadding) / 2, yPos, 0))
         yPos = yPos + comparisonSize.y + GUILinearScale(48)
     end
 
@@ -2785,18 +2823,15 @@ local function SortByColumn(self, isMarine, sortField, inv)
         end
     end
 
-    table.sort(
-        sortTable,
-        function(a, b)
-            if a.message[sortField] == b.message[sortField] then
-                return a.originalOrder < b.originalOrder
-            elseif sortField == "lowerCaseName" and not inv or sortField ~= "lowerCaseName" and inv then
-                return a.message[sortField] < b.message[sortField]
-            else
-                return a.message[sortField] > b.message[sortField]
-            end
+    table.sort(sortTable, function(a, b)
+        if a.message[sortField] == b.message[sortField] then
+            return a.originalOrder < b.originalOrder
+        elseif sortField == "lowerCaseName" and not inv or sortField ~= "lowerCaseName" and inv then
+            return a.message[sortField] < b.message[sortField]
+        else
+            return a.message[sortField] > b.message[sortField]
         end
-    )
+    end)
 
     for index, row in ipairs(sortTable) do
         local bgColor = isMarine and kMarinePlayerStatsOddColor or kAlienPlayerStatsOddColor
@@ -2851,18 +2886,18 @@ function GUIGameEndStats:CheckTooltipItem()
 
     -- Loop thru different tooltip items in case we are on one with tooltip
     for i, item in pairs(self.toolTipCards) do
-        --print("Item: " .. tostring(type(item)))
+        -- print("Item: " .. tostring(type(item)))
         if item.tooltip then
-            --print("Tooltip: " .. tostring(item.tooltip))
-            --if item:GetIsVisible() and GUIItemContainsPoint(item, mouseX, mouseY) then
+            -- print("Tooltip: " .. tostring(item.tooltip))
+            -- if item:GetIsVisible() and GUIItemContainsPoint(item, mouseX, mouseY) then
             if GUIItemContainsPoint(item, mouseX, mouseY) then
-                --print("Hover activated :-)")
+                -- print("Hover activated :-)")
                 self.tooltip:SetText(item.tooltip)
                 self.tooltip:Show()
             end
         end
     end
-    --GUIItemContainsPoint(row.background, mouseX, mouseY)
+    -- GUIItemContainsPoint(row.background, mouseX, mouseY)
 end
 
 function GUIGameEndStats:UpdateRowHighlight()
@@ -2935,8 +2970,10 @@ function GUIGameEndStats:UpdateSlidebar()
 
     -- Check if it's visible again since we hide the menu if the game starts
     local showSlidebar = self.contentSize > kContentMaxYSize and self:GetIsVisible()
-    local sliderPos = (self.slideOffset / (self.contentSize - kContentMaxYSize) * kContentMaxYSize) - self.slider:GetSize().y / 2
-    self.background:SetPosition(Vector(-(kTitleSize.x - GUILinearScale(32)) / 2, -self.slideOffset + GUILinearScale(128), 0))
+    local sliderPos = (self.slideOffset / (self.contentSize - kContentMaxYSize) * kContentMaxYSize) -
+                          self.slider:GetSize().y / 2
+    self.background:SetPosition(Vector(-(kTitleSize.x - GUILinearScale(32)) / 2,
+        -self.slideOffset + GUILinearScale(128), 0))
 
     if math.abs(self.slider:GetPosition().y - sliderPos) > 2.5 then
         StartSoundEffect(kSlideSound)
@@ -2951,7 +2988,9 @@ function GUIGameEndStats:CheckGameState()
     local warmupActive = gameInfo.GetWarmUpActive and gameInfo:GetWarmUpActive()
 
     -- Hide the stats when the game starts if we're on a team
-    if PlayerUI_GetHasGameStarted() and not warmupActive and (Client.GetLocalPlayer():GetTeamNumber() ~= kTeamReadyRoom and Client.GetLocalPlayer():GetTeamNumber() ~= kSpectatorIndex) then
+    if PlayerUI_GetHasGameStarted() and not warmupActive and
+        (Client.GetLocalPlayer():GetTeamNumber() ~= kTeamReadyRoom and Client.GetLocalPlayer():GetTeamNumber() ~=
+            kSpectatorIndex) then
         self:SetIsVisible(false)
         self.actionIconGUI:Hide()
     end
@@ -3002,12 +3041,9 @@ local function tblIndexSortSubValue(tbl, subvalue)
         idx[i] = i
     end -- build a table of indexes
     -- sort the indexes, but use the values as the sorting criteria
-    table.sort(
-        idx,
-        function(a, b)
-            return tbl[a][subvalue] > tbl[b][subvalue]
-        end
-    )
+    table.sort(idx, function(a, b)
+        return tbl[a][subvalue] > tbl[b][subvalue]
+    end)
     -- return the sorted indexes
     return (table.unpack or unpack)(idx)
 end
@@ -3065,8 +3101,11 @@ function GUIGameEndStats:BuildTopWinGraph()
 
     item.textShadow = GUIManager:CreateTextItem()
     item.textShadow:SetStencilFunc(GUIItem.NotEqual)
-    item.textShadow:SetFont(ReadOnly {family = "Arial", size = 48})
-    --item.textShadow:SetFontName(kTitleFontName)
+    item.textShadow:SetFont(ReadOnly {
+        family = "Arial",
+        size = 48
+    })
+    -- item.textShadow:SetFontName(kTitleFontName)
     item.textShadow:SetColor(Color(0, 0, 0, 1))
     item.textShadow:SetScale(scaledVector)
     GUIMakeFontScale(item.textShadow)
@@ -3074,15 +3113,18 @@ function GUIGameEndStats:BuildTopWinGraph()
     item.textShadow:SetText(labelText)
     item.textShadow:SetTextAlignmentX(GUIItem.Align_Center)
     item.textShadow:SetTextAlignmentY(GUIItem.Align_Min)
-    --item.textShadow:SetPosition(Vector(kTextShadowOffset, item.background:GetSize().y / 2 + kTextShadowOffset, 0))
+    -- item.textShadow:SetPosition(Vector(kTextShadowOffset, item.background:GetSize().y / 2 + kTextShadowOffset, 0))
     item.textShadow:SetPosition(Vector(kTextShadowOffset, kTextShadowOffset, 0))
     item.textShadow:SetLayer(kGUILayerMainMenu)
     item.background:AddChild(item.textShadow)
 
     item.text = GUIManager:CreateTextItem()
     item.text:SetStencilFunc(GUIItem.NotEqual)
-    --item.text:SetFontName(kTitleFontName)
-    item.text:SetFont(ReadOnly {family = "Arial", size = 48})
+    -- item.text:SetFontName(kTitleFontName)
+    item.text:SetFont(ReadOnly {
+        family = "Arial",
+        size = 48
+    })
     item.text:SetColor(Color(1, 1, 1, 1))
     item.text:SetScale(scaledVector)
     GUIMakeFontScale(item.text)
@@ -3097,22 +3139,28 @@ function GUIGameEndStats:BuildTopWinGraph()
     -- If we have com object then create the row on the right side
     if comObject then
         local comCard = {}
-        local comCard = self:CreateGraphicHeader("Commander", labelColor, topScoreLogoTexture, Vector(10, 10, 0), kLogoSize.x, kLogoSize.y)
+        local comCard = self:CreateGraphicHeader("Commander", labelColor, topScoreLogoTexture, Vector(10, 10, 0),
+            kLogoSize.x, kLogoSize.y)
         comCard.rows = {}
         comCard.teamNumber = miscDataTable.winningTeam
         comCard.background:SetPosition(Vector(GUILinearScale(32), GUILinearScale(64), 0))
-        table.insert(comCard.rows, CreateTopPlayerMainRow(comCard.tableBackground, kAverageRowColor, Color(1, 1, 1, 1), comObject, nil, nil))
+        table.insert(comCard.rows, CreateTopPlayerMainRow(comCard.tableBackground, kAverageRowColor, Color(1, 1, 1, 1),
+            comObject, nil, nil))
         self.topPlayersCards.com = comCard
     end
 
     -- Create topPlayer
     if topPlayerObject then
         local topPlayerCard = {}
-        local topPlayerCard = self:CreateGraphicHeader("Top Player", labelColor, topScoreLogoTexture, Vector(10, 10, 0), kLogoSize.x, kLogoSize.y)
+        local topPlayerCard = self:CreateGraphicHeader("Top Player", labelColor, topScoreLogoTexture, Vector(10, 10, 0),
+            kLogoSize.x, kLogoSize.y)
         topPlayerCard.rows = {}
         topPlayerCard.teamNumber = miscDataTable.winningTeam
-        topPlayerCard.background:SetPosition(Vector(item.background:GetSize().x - (topPlayerCard.background:GetSize().x + GUILinearScale(64)), GUILinearScale(64), 0))
-        table.insert(topPlayerCard.rows, CreateTopPlayerMainRow(topPlayerCard.tableBackground, kAverageRowColor, Color(1, 1, 1, 1), topPlayerObject, nil, nil))
+        topPlayerCard.background:SetPosition(Vector(item.background:GetSize().x -
+                                                        (topPlayerCard.background:GetSize().x + GUILinearScale(64)),
+            GUILinearScale(64), 0))
+        table.insert(topPlayerCard.rows, CreateTopPlayerMainRow(topPlayerCard.tableBackground, kAverageRowColor,
+            Color(1, 1, 1, 1), topPlayerObject, nil, nil))
         self.topPlayersCards.com = topPlayerCard
     end
 
@@ -3134,11 +3182,15 @@ function GUIGameEndStats:BuildTopPlayersGraph()
             else
                 topScoreLogoTexture = kAlienStatsLogo
             end
-            local TopScorePlayerCard = self:CreateGraphicHeader("Most Valued Player", bgColor, topScoreLogoTexture, Vector(10, 10, 0), kLogoSize.x, kLogoSize.y)
+            local TopScorePlayerCard = self:CreateGraphicHeader("Most Valued Player", bgColor, topScoreLogoTexture,
+                Vector(10, 10, 0), kLogoSize.x, kLogoSize.y)
             TopScorePlayerCard.rows = {}
             TopScorePlayerCard.teamNumber = -2
-            TopScorePlayerCard.background:SetPosition(Vector((kTitleSize.x / 2) - (kCardSize.x / 2), kBackgroundSize.y + GUILinearScale(16), 0))
-            table.insert(TopScorePlayerCard.rows, CreateTopPlayerMainRow(TopScorePlayerCard.tableBackground, kAverageRowColor, Color(1, 1, 1, 1), TopScorePlayer, "Score", round(TopScorePlayer.score, 0)))
+            TopScorePlayerCard.background:SetPosition(Vector((kTitleSize.x / 2) - (kCardSize.x / 2),
+                kBackgroundSize.y + GUILinearScale(16), 0))
+            table.insert(TopScorePlayerCard.rows,
+                CreateTopPlayerMainRow(TopScorePlayerCard.tableBackground, kAverageRowColor, Color(1, 1, 1, 1),
+                    TopScorePlayer, "Score", round(TopScorePlayer.score, 0)))
             self.topPlayersCards.mvp = TopScorePlayerCard
         end
 
@@ -3153,17 +3205,22 @@ function GUIGameEndStats:BuildTopPlayersGraph()
             else
                 topScoreLogoTexture = kAlienStatsLogo
             end
-            local TopKillsPlayerCard = self:CreateGraphicHeader("Top Killer", bgColor, topScoreLogoTexture, Vector(10, 10, 0), kLogoSize.x, kLogoSize.y)
+            local TopKillsPlayerCard = self:CreateGraphicHeader("Top Killer", bgColor, topScoreLogoTexture,
+                Vector(10, 10, 0), kLogoSize.x, kLogoSize.y)
             TopKillsPlayerCard.rows = {}
             TopKillsPlayerCard.teamNumber = -2
-            TopKillsPlayerCard.background:SetPosition(Vector(GUILinearScale(32), kBackgroundSize.y + GUILinearScale(16), 0))
-            table.insert(TopKillsPlayerCard.rows, CreateTopPlayerSmallRow(TopKillsPlayerCard.tableBackground, kAverageRowColor, Color(1, 1, 1, 1), TopKillsPlayer, "Kills", printNum(TopKillsPlayer.kills)))
+            TopKillsPlayerCard.background:SetPosition(Vector(GUILinearScale(32), kBackgroundSize.y + GUILinearScale(16),
+                0))
+            table.insert(TopKillsPlayerCard.rows,
+                CreateTopPlayerSmallRow(TopKillsPlayerCard.tableBackground, kAverageRowColor, Color(1, 1, 1, 1),
+                    TopKillsPlayer, "Kills", printNum(TopKillsPlayer.kills)))
             self.topPlayersCards.kills = TopKillsPlayerCard
         end
 
         -- Top Structure Dmg
-        if DIPS_EnahncedStats and (teamSpecificStatsLogTable["marineRtDamage"] or teamSpecificStatsLogTable["alienRtDamage"]) then
-            --Switch this to top RT damage
+        if DIPS_EnahncedStats and
+            (teamSpecificStatsLogTable["marineRtDamage"] or teamSpecificStatsLogTable["alienRtDamage"]) then
+            -- Switch this to top RT damage
             local playerData = {}
             if teamSpecificStatsLogTable["marineRtDamage"] then
                 for _, message in pairs(teamSpecificStatsLogTable["marineRtDamage"]) do
@@ -3181,12 +3238,9 @@ function GUIGameEndStats:BuildTopPlayersGraph()
                     table.insert(playerData, tssItem)
                 end
             end
-            table.sort(
-                playerData,
-                function(a, b)
-                    return a.Value > b.Value
-                end
-            )
+            table.sort(playerData, function(a, b)
+                return a.Value > b.Value
+            end)
             TopSDmgPlayer = playerData[1].playerData
             local rtAmount = "NaN"
             if TopSDmgPlayer.isMarine then
@@ -3197,12 +3251,17 @@ function GUIGameEndStats:BuildTopPlayersGraph()
                 topScoreLogoTexture = kAlienStatsLogo
                 rtAmount = round(playerData[1].Value / (kExtractorHealth + kExtractorArmor), 1)
             end
-            local TopSDmgPlayerCard = self:CreateGraphicHeader("Top Resource Tower", bgColor, topScoreLogoTexture, Vector(10, 10, 0), kLogoSize.x, kLogoSize.y)
+            local TopSDmgPlayerCard = self:CreateGraphicHeader("Top Resource Tower", bgColor, topScoreLogoTexture,
+                Vector(10, 10, 0), kLogoSize.x, kLogoSize.y)
             TopSDmgPlayerCard.rows = {}
             TopSDmgPlayerCard.teamNumber = -2
             TopSDmgPlayerCard.backgroundRight:SetTexturePixelCoordinates(GUIUnpackCoords(kHeaderCoordsRight))
-            TopSDmgPlayerCard.background:SetPosition(Vector(kTitleSize.x - kCardSize.x - GUILinearScale(32), kBackgroundSize.y + GUILinearScale(16), 0))
-            table.insert(TopSDmgPlayerCard.rows, CreateTopPlayerSmallRow(TopSDmgPlayerCard.tableBackground, kAverageRowColor, Color(1, 1, 1, 1), TopSDmgPlayer, "RT Damage", humanNumber(roundNumber(playerData[1].Value, 0)) .. " (" .. rtAmount .. " RTs)"))
+            TopSDmgPlayerCard.background:SetPosition(Vector(kTitleSize.x - kCardSize.x - GUILinearScale(32),
+                kBackgroundSize.y + GUILinearScale(16), 0))
+            table.insert(TopSDmgPlayerCard.rows,
+                CreateTopPlayerSmallRow(TopSDmgPlayerCard.tableBackground, kAverageRowColor, Color(1, 1, 1, 1),
+                    TopSDmgPlayer, "RT Damage", humanNumber(roundNumber(playerData[1].Value, 0)) .. " (" .. rtAmount ..
+                        " RTs)"))
             self.topPlayersCards.sdmg = TopSDmgPlayerCard
         else
             TopSDmgPlayer = finalStatsTable[tblIndexSortSubValue(finalStatsTable, "sdmg")]
@@ -3212,12 +3271,16 @@ function GUIGameEndStats:BuildTopPlayersGraph()
                 else
                     topScoreLogoTexture = kAlienStatsLogo
                 end
-                local TopSDmgPlayerCard = self:CreateGraphicHeader("Top Structure", bgColor, topScoreLogoTexture, Vector(10, 10, 0), kLogoSize.x, kLogoSize.y)
+                local TopSDmgPlayerCard = self:CreateGraphicHeader("Top Structure", bgColor, topScoreLogoTexture,
+                    Vector(10, 10, 0), kLogoSize.x, kLogoSize.y)
                 TopSDmgPlayerCard.rows = {}
                 TopSDmgPlayerCard.teamNumber = -2
                 TopSDmgPlayerCard.backgroundRight:SetTexturePixelCoordinates(GUIUnpackCoords(kHeaderCoordsRight))
-                TopSDmgPlayerCard.background:SetPosition(Vector(kTitleSize.x - kCardSize.x - GUILinearScale(32), kBackgroundSize.y + GUILinearScale(16), 0))
-                table.insert(TopSDmgPlayerCard.rows, CreateTopPlayerSmallRow(TopSDmgPlayerCard.tableBackground, kAverageRowColor, Color(1, 1, 1, 1), TopSDmgPlayer, "Structure Damage", humanNumber(roundNumber(TopSDmgPlayer.sdmg, 0))))
+                TopSDmgPlayerCard.background:SetPosition(Vector(kTitleSize.x - kCardSize.x - GUILinearScale(32),
+                    kBackgroundSize.y + GUILinearScale(16), 0))
+                table.insert(TopSDmgPlayerCard.rows,
+                    CreateTopPlayerSmallRow(TopSDmgPlayerCard.tableBackground, kAverageRowColor, Color(1, 1, 1, 1),
+                        TopSDmgPlayer, "Structure Damage", humanNumber(roundNumber(TopSDmgPlayer.sdmg, 0))))
                 self.topPlayersCards.sdmg = TopSDmgPlayerCard
             end
         end
@@ -3230,11 +3293,15 @@ function GUIGameEndStats:BuildTopPlayersGraph()
             else
                 topScoreLogoTexture = kAlienStatsLogo
             end
-            local TopPDmgPlayerCard = self:CreateGraphicHeader("Top Damage", bgColor, topScoreLogoTexture, Vector(10, 10, 0), kLogoSize.x, kLogoSize.y)
+            local TopPDmgPlayerCard = self:CreateGraphicHeader("Top Damage", bgColor, topScoreLogoTexture,
+                Vector(10, 10, 0), kLogoSize.x, kLogoSize.y)
             TopPDmgPlayerCard.rows = {}
             TopPDmgPlayerCard.teamNumber = -2
-            TopPDmgPlayerCard.background:SetPosition(Vector(GUILinearScale(32), kBackgroundSize.y + GUILinearScale(146 + 16), 0))
-            table.insert(TopPDmgPlayerCard.rows, CreateTopPlayerSmallRow(TopPDmgPlayerCard.tableBackground, kAverageRowColor, Color(1, 1, 1, 1), TopPDmgPlayer, "Player Damage", humanNumber(roundNumber(TopPDmgPlayer.pdmg, 0))))
+            TopPDmgPlayerCard.background:SetPosition(Vector(GUILinearScale(32),
+                kBackgroundSize.y + GUILinearScale(146 + 16), 0))
+            table.insert(TopPDmgPlayerCard.rows,
+                CreateTopPlayerSmallRow(TopPDmgPlayerCard.tableBackground, kAverageRowColor, Color(1, 1, 1, 1),
+                    TopPDmgPlayer, "Player Damage", humanNumber(roundNumber(TopPDmgPlayer.pdmg, 0))))
             self.topPlayersCards.pdmg = TopPDmgPlayerCard
         end
 
@@ -3248,11 +3315,15 @@ function GUIGameEndStats:BuildTopPlayersGraph()
             else
                 topScoreLogoTexture = kAlienStatsLogo
             end
-            local TopBuildTimePlayerCard = self:CreateGraphicHeader("Welder/Builder", bgColor, topScoreLogoTexture, Vector(10, 10, 0), kLogoSize.x, kLogoSize.y)
+            local TopBuildTimePlayerCard = self:CreateGraphicHeader("Welder/Builder", bgColor, topScoreLogoTexture,
+                Vector(10, 10, 0), kLogoSize.x, kLogoSize.y)
             TopBuildTimePlayerCard.rows = {}
             TopBuildTimePlayerCard.teamNumber = -2
-            TopBuildTimePlayerCard.background:SetPosition(Vector(kTitleSize.x - kCardSize.x - GUILinearScale(32), kBackgroundSize.y + GUILinearScale(146 + 16), 0))
-            table.insert(TopBuildTimePlayerCard.rows, CreateTopPlayerSmallRow(TopBuildTimePlayerCard.tableBackground, kAverageRowColor, Color(1, 1, 1, 1), TopBuildTimePlayer, "Time", string.format("%d:%02d", minutes, seconds)))
+            TopBuildTimePlayerCard.background:SetPosition(Vector(kTitleSize.x - kCardSize.x - GUILinearScale(32),
+                kBackgroundSize.y + GUILinearScale(146 + 16), 0))
+            table.insert(TopBuildTimePlayerCard.rows,
+                CreateTopPlayerSmallRow(TopBuildTimePlayerCard.tableBackground, kAverageRowColor, Color(1, 1, 1, 1),
+                    TopBuildTimePlayer, "Time", string.format("%d:%02d", minutes, seconds)))
             self.topPlayersCards = TopBuildTimePlayerCard
         end
     end
@@ -3281,14 +3352,17 @@ function GUIGameEndStats:BuildEALGraph()
     self.topPlayersCards.ealcards = {}
     if self.equipmentAndLifeformsTextShadow:GetIsVisible() then
         local techName = ""
-        local equipmentAndLifeformsAlienCard = self:CreateEALGraphicHeader("Lifeforms", kAlienStatsColor, kAlienStatsLogo, Vector(10, 10, 0), kLogoSize.x, kLogoSize.y, "EVOLVED", "LOST")
+        local equipmentAndLifeformsAlienCard = self:CreateEALGraphicHeader("Lifeforms", kAlienStatsColor,
+            kAlienStatsLogo, Vector(10, 10, 0), kLogoSize.x, kLogoSize.y, "EVOLVED", "LOST")
         equipmentAndLifeformsAlienCard.rows = {}
         equipmentAndLifeformsAlienCard.teamNumber = -2
         local yPos = (366 > kBackgroundSize.y) and 366 or kBackgroundSize.y
         if self.topPlayersTextShadow:GetIsVisible() then
-            equipmentAndLifeformsAlienCard.background:SetPosition(Vector(GUILinearScale(32) / 2, GUILinearScale(yPos), 0))
+            equipmentAndLifeformsAlienCard.background:SetPosition(
+                Vector(GUILinearScale(32) / 2, GUILinearScale(yPos), 0))
         else
-            equipmentAndLifeformsAlienCard.background:SetPosition(Vector(GUILinearScale(32) / 2, GUILinearScale(16 + 32), 0))
+            equipmentAndLifeformsAlienCard.background:SetPosition(
+                Vector(GUILinearScale(32) / 2, GUILinearScale(16 + 32), 0))
         end
 
         -- Skulks
@@ -3301,7 +3375,9 @@ function GUIGameEndStats:BuildEALGraph()
             lostCount = ealEntry.lostCount
         end
 
-        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture, {0, 114 * 0, 340, 114 * 1}, Vector(90, 30, 0), 0, false, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture,
+            {0, 114 * 0, 340, 114 * 1}, Vector(90, 30, 0), 0, false, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
 
@@ -3314,7 +3390,9 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture, {0, 114 * 1, 340, 114 * 2}, Vector(90, 30, 0), 1, false, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture,
+            {0, 114 * 1, 340, 114 * 2}, Vector(90, 30, 0), 1, false, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
 
@@ -3327,7 +3405,9 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture, {0, 114 * 2, 340, 114 * 3}, Vector(90, 30, 0), 2, false, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture,
+            {0, 114 * 2, 340, 114 * 3}, Vector(90, 30, 0), 2, false, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards, itemCard)
 
@@ -3340,7 +3420,9 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture, {0, 114 * 3, 340, 114 * 4}, Vector(90, 30, 0), 3, false, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture,
+            {0, 114 * 3, 340, 114 * 4}, Vector(90, 30, 0), 3, false, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
 
@@ -3353,12 +3435,14 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture, {0, 114 * 4, 340, 114 * 5}, Vector(90, 30, 0), 4, false, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture,
+            {0, 114 * 4, 340, 114 * 5}, Vector(90, 30, 0), 4, false, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
 
         -- Prowler
-        if enumContainsKey(kTechId, "Prowler") then --kTechId["Prowler"] ~= nil then
+        if enumContainsKey(kTechId, "Prowler") then -- kTechId["Prowler"] ~= nil then
             ealEntry = GetEalEntry("Prowler")
             local buyCount = 0
             local lostCount = 0
@@ -3366,7 +3450,8 @@ function GUIGameEndStats:BuildEALGraph()
                 buyCount = ealEntry.buyCount
                 lostCount = ealEntry.lostCount
             end
-            local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture, {0, 114 * 5, 340, 114 * 6}, Vector(90, 30, 0), 5, false, "Prowler")
+            local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount,
+                kEalAlienTexture, {0, 114 * 5, 340, 114 * 6}, Vector(90, 30, 0), 5, false, "Prowler")
             table.insert(self.toolTipCards, itemCard.icon)
             table.insert(self.topPlayersCards.ealcards, itemCard)
         end
@@ -3380,7 +3465,9 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture, {0, 114 * 10, 340, 114 * 11}, Vector(90, 30, 0), 6, false, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture,
+            {0, 114 * 10, 340, 114 * 11}, Vector(90, 30, 0), 6, false, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
 
@@ -3393,7 +3480,9 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture, {0, 114 * 11, 340, 114 * 12}, Vector(90, 30, 0), 6.74, false, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture,
+            {0, 114 * 11, 340, 114 * 12}, Vector(90, 30, 0), 6.74, false, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
 
@@ -3406,7 +3495,9 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture, {0, 114 * 9, 340, 114 * 10}, Vector(90, 30, 0), 7.5, false, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture,
+            {0, 114 * 9, 340, 114 * 10}, Vector(90, 30, 0), 7.5, false, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
 
@@ -3419,7 +3510,9 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture, {0, 114 * 6, 340, 114 * 7}, Vector(90, 30, 0), 8.5, false, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture,
+            {0, 114 * 6, 340, 114 * 7}, Vector(90, 30, 0), 8.5, false, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
 
@@ -3432,7 +3525,9 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture, {0, 114 * 8, 340, 114 * 9}, Vector(90, 30, 0), 9.25, false, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture,
+            {0, 114 * 8, 340, 114 * 9}, Vector(90, 30, 0), 9.25, false, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
 
@@ -3445,18 +3540,23 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture, {0, 114 * 7, 340, 114 * 8}, Vector(90, 30, 0), 10, false, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsAlienCard.background, buyCount, lostCount, kEalAlienTexture,
+            {0, 114 * 7, 340, 114 * 8}, Vector(90, 30, 0), 10, false, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
 
         -- Marines:
-        local equipmentAndLifeformsMarineCard = self:CreateEALGraphicHeader("Equipment", kMarineStatsColor, kMarineStatsLogo, Vector(10, 10, 0), kLogoSize.x, kLogoSize.y, "BOUGHT", "LOST")
+        local equipmentAndLifeformsMarineCard = self:CreateEALGraphicHeader("Equipment", kMarineStatsColor,
+            kMarineStatsLogo, Vector(10, 10, 0), kLogoSize.x, kLogoSize.y, "BOUGHT", "LOST")
         equipmentAndLifeformsMarineCard.rows = {}
         equipmentAndLifeformsMarineCard.teamNumber = -2
         if self.topPlayersTextShadow:GetIsVisible() then
-            equipmentAndLifeformsMarineCard.background:SetPosition(Vector(GUILinearScale(32) / 2, GUILinearScale(yPos + 96 - 16), 0))
+            equipmentAndLifeformsMarineCard.background:SetPosition(
+                Vector(GUILinearScale(32) / 2, GUILinearScale(yPos + 96 - 16), 0))
         else
-            equipmentAndLifeformsMarineCard.background:SetPosition(Vector(GUILinearScale(32) / 2, GUILinearScale(16 + 32 + 96 - 16), 0))
+            equipmentAndLifeformsMarineCard.background:SetPosition(
+                Vector(GUILinearScale(32) / 2, GUILinearScale(16 + 32 + 96 - 16), 0))
         end
 
         -- Shotgun
@@ -3468,7 +3568,9 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount, kEalMarineArmoryTexture, {0, 114 * 2, 340, 114 * 3}, Vector(90, 30, 0), 0, true, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount,
+            kEalMarineArmoryTexture, {0, 114 * 2, 340, 114 * 3}, Vector(90, 30, 0), 0, true, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
 
@@ -3481,7 +3583,9 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount, kEalMarineArmoryTexture, {0, 114 * 3, 340, 114 * 4}, Vector(90, 30, 0), 1, true, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount,
+            kEalMarineArmoryTexture, {0, 114 * 3, 340, 114 * 4}, Vector(90, 30, 0), 1, true, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
 
@@ -3494,7 +3598,9 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount, kEalMarineArmoryTexture, {0, 114 * 4, 340, 114 * 5}, Vector(90, 30, 0), 2, true, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount,
+            kEalMarineArmoryTexture, {0, 114 * 4, 340, 114 * 5}, Vector(90, 30, 0), 2, true, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
 
@@ -3507,7 +3613,9 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount, kEalMarineArmoryTexture, {0, 114 * 5, 340, 114 * 6}, Vector(90, 30, 0), 3, true, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount,
+            kEalMarineArmoryTexture, {0, 114 * 5, 340, 114 * 6}, Vector(90, 30, 0), 3, true, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
 
@@ -3520,7 +3628,9 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount, kEalMarineArmoryTexture, {0, 114 * 12, 340, 114 * 13}, Vector(90, 30, 0), 4.25, true, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount,
+            kEalMarineArmoryTexture, {0, 114 * 12, 340, 114 * 13}, Vector(90, 30, 0), 4.25, true, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
 
@@ -3533,7 +3643,9 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount, kEalMarineArmoryTexture, {0, 114 * 14, 340, 114 * 15}, Vector(90, 30, 0), 5, true, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount,
+            kEalMarineArmoryTexture, {0, 114 * 14, 340, 114 * 15}, Vector(90, 30, 0), 5, true, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
 
@@ -3546,7 +3658,9 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount, kEalMarineArmoryTexture, {0, 114 * 13, 340, 114 * 14}, Vector(90, 30, 0), 5.75, true, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount,
+            kEalMarineArmoryTexture, {0, 114 * 13, 340, 114 * 14}, Vector(90, 30, 0), 5.75, true, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
 
@@ -3559,7 +3673,9 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount, kEalMarineArmoryTexture, {0, 114 * 7, 340, 114 * 8}, Vector(90, 30, 0), 7, true, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount,
+            kEalMarineArmoryTexture, {0, 114 * 7, 340, 114 * 8}, Vector(90, 30, 0), 7, true, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
 
@@ -3572,7 +3688,9 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount, kEalMarineArmoryTexture, {0, 114 * 8, 340, 114 * 9}, Vector(90, 30, 0), 7.75, true, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount,
+            kEalMarineArmoryTexture, {0, 114 * 8, 340, 114 * 9}, Vector(90, 30, 0), 7.75, true, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
 
@@ -3585,7 +3703,9 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount, kEalMarineArmoryTexture, {0, 114 * 9, 340, 114 * 10}, Vector(90, 30, 0), 8.5, true, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount,
+            kEalMarineArmoryTexture, {0, 114 * 9, 340, 114 * 10}, Vector(90, 30, 0), 8.5, true, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
 
@@ -3598,7 +3718,9 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount, kEalMarineArmoryTexture, {0, 114 * 10, 340, 114 * 11}, Vector(90, 30, 0), 9.25, true, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount,
+            kEalMarineArmoryTexture, {0, 114 * 10, 340, 114 * 11}, Vector(90, 30, 0), 9.25, true, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
 
@@ -3611,7 +3733,9 @@ function GUIGameEndStats:BuildEALGraph()
             buyCount = ealEntry.buyCount
             lostCount = ealEntry.lostCount
         end
-        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount, kEalMarineArmoryTexture, {0, 114 * 11, 340, 114 * 12}, Vector(90, 30, 0), 10, true, Locale.ResolveString(LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
+        local itemCard = CreateEalIcon(equipmentAndLifeformsMarineCard.background, buyCount, lostCount,
+            kEalMarineArmoryTexture, {0, 114 * 11, 340, 114 * 12}, Vector(90, 30, 0), 10, true, Locale.ResolveString(
+                LookupTechData(kTechId[techName], kTechDataDisplayName, "unknown")))
         table.insert(self.toolTipCards, itemCard.icon)
         table.insert(self.topPlayersCards.ealcards, itemCard)
         self.topEalCards.Aliens = equipmentAndLifeformsAlienCard
@@ -3620,7 +3744,7 @@ function GUIGameEndStats:BuildEALGraph()
 end
 
 function GUIGameEndStats:BuildTSSGraph()
-    --"Lifeforms", kAlienStatsColor, kAlienStatsLogo, Vector(10, 10, 0), kLogoSize.x, kLogoSize.y, "EVOLVED", "LOST"
+    -- "Lifeforms", kAlienStatsColor, kAlienStatsLogo, Vector(10, 10, 0), kLogoSize.x, kLogoSize.y, "EVOLVED", "LOST"
 
     local AlienItem = {}
 
@@ -3649,7 +3773,7 @@ function GUIGameEndStats:BuildTSSGraph()
     AlienItem.background:AddChild(AlienItem.backgroundLeft)
 
     AlienItem.backgroundRight = GUIManager:CreateGraphicItem()
-    --AlienItem.backgroundRight:SetStencilFunc(GUIItem.NotEqual)
+    -- AlienItem.backgroundRight:SetStencilFunc(GUIItem.NotEqual)
     AlienItem.backgroundRight:SetColor(kAlienStatsColor)
     AlienItem.backgroundRight:SetTexture(kHeaderTexture)
     AlienItem.backgroundRight:SetTexturePixelCoordinates(GUIUnpackCoords(kHeaderCoordsRight))
@@ -3738,90 +3862,102 @@ function GUIGameEndStats:BuildTSSGraph()
 
     self.topTssCards.MarineItem = MarineItem
     local tssItem
-    --Process Alien Stats
+    -- Process Alien Stats
     local i = 0
     local ItemNr = 0
     if teamSpecificStatsLogTable["alienSpecialKill"] then
-        tssItem = CreateTssItem(AlienItem.background, teamSpecificStatsLogTable["alienSpecialKill"], 0, "Easy Prey", false, false, ItemNr, "Kills with parasite, babbler or healspray")
+        tssItem = CreateTssItem(AlienItem.background, teamSpecificStatsLogTable["alienSpecialKill"], 0, "Easy Prey",
+            false, false, ItemNr, "Kills with parasite, babbler or healspray")
         table.insert(self.toolTipCards, tssItem.labelText)
         table.insert(self.toolTipCards, tssItem.avatar)
         ItemNr = ItemNr + 1
     end
 
     if teamSpecificStatsLogTable["Parasite"] then
-        tssItem = CreateTssItem(AlienItem.background, teamSpecificStatsLogTable["Parasite"], 2, "Parasites", false, false, ItemNr, "Parasites per min as skulk\nOnly marine, mine, phasegate or arc count")
+        tssItem = CreateTssItem(AlienItem.background, teamSpecificStatsLogTable["Parasite"], 2, "Parasites", false,
+            false, ItemNr, "Parasites per min as skulk\nOnly marine, mine, phasegate or arc count")
         table.insert(self.toolTipCards, tssItem.labelText)
         table.insert(self.toolTipCards, tssItem.avatar)
         ItemNr = ItemNr + 1
     end
 
     if teamSpecificStatsLogTable["MineKills"] then
-        tssItem = CreateTssItem(AlienItem.background, teamSpecificStatsLogTable["MineKills"], 0, "Minesweeper", false, false, ItemNr, "Most mines triggered or destroyed")
+        tssItem = CreateTssItem(AlienItem.background, teamSpecificStatsLogTable["MineKills"], 0, "Minesweeper", false,
+            false, ItemNr, "Most mines triggered or destroyed")
         table.insert(self.toolTipCards, tssItem.labelText)
         table.insert(self.toolTipCards, tssItem.avatar)
         ItemNr = ItemNr + 1
     end
 
     if teamSpecificStatsLogTable["GorgeHealPlayer"] then
-        tssItem = CreateTssItem(AlienItem.background, teamSpecificStatsLogTable["GorgeHealPlayer"], 0, "Field Doctor", false, false, ItemNr, "Amount of healing done to other alien players")
+        tssItem = CreateTssItem(AlienItem.background, teamSpecificStatsLogTable["GorgeHealPlayer"], 0, "Field Doctor",
+            false, false, ItemNr, "Amount of healing done to other alien players")
         table.insert(self.toolTipCards, tssItem.labelText)
         table.insert(self.toolTipCards, tssItem.avatar)
         ItemNr = ItemNr + 1
     end
 
     if teamSpecificStatsLogTable["GorgeHealStruct"] then
-        tssItem = CreateTssItem(AlienItem.background, teamSpecificStatsLogTable["GorgeHealStruct"], 0, "Bob the Builder", false, false, ItemNr, "Amount of healing done to structures")
+        tssItem = CreateTssItem(AlienItem.background, teamSpecificStatsLogTable["GorgeHealStruct"], 0,
+            "Bob the Builder", false, false, ItemNr, "Amount of healing done to structures")
         table.insert(self.toolTipCards, tssItem.labelText)
         table.insert(self.toolTipCards, tssItem.avatar)
         ItemNr = ItemNr + 1
     end
 
     if teamSpecificStatsLogTable["alienRtDamage"] then
-        tssItem = CreateTssItem(AlienItem.background, teamSpecificStatsLogTable["alienRtDamage"], 0, "Resource Eater", false, false, ItemNr, "Amount of damage done to resource towers")
+        tssItem = CreateTssItem(AlienItem.background, teamSpecificStatsLogTable["alienRtDamage"], 0, "Resource Eater",
+            false, false, ItemNr, "Amount of damage done to resource towers")
         table.insert(self.toolTipCards, tssItem.labelText)
         table.insert(self.toolTipCards, tssItem.avatar)
         ItemNr = ItemNr + 1
     end
 
-    --Marines
+    -- Marines
     ItemNr = 0
     if teamSpecificStatsLogTable["marineSpecialKill"] then
-        tssItem = CreateTssItem(MarineItem.background, teamSpecificStatsLogTable["marineSpecialKill"], 0, "Who Needs Bullets", nil, nil, ItemNr, "Kills with axe, welder, riflebutt or grenades")
+        tssItem = CreateTssItem(MarineItem.background, teamSpecificStatsLogTable["marineSpecialKill"], 0,
+            "Who Needs Bullets", nil, nil, ItemNr, "Kills with axe, welder, riflebutt or grenades")
         table.insert(self.toolTipCards, tssItem.labelText)
         table.insert(self.toolTipCards, tssItem.avatar)
         ItemNr = ItemNr + 1
     end
 
     if teamSpecificStatsLogTable["WeldPlayer"] then
-        tssItem = CreateTssItem(MarineItem.background, teamSpecificStatsLogTable["WeldPlayer"], 0, "Field Doctor", nil, nil, ItemNr, "Most welding on other marine players")
+        tssItem = CreateTssItem(MarineItem.background, teamSpecificStatsLogTable["WeldPlayer"], 0, "Field Doctor", nil,
+            nil, ItemNr, "Most welding on other marine players")
         table.insert(self.toolTipCards, tssItem.labelText)
         table.insert(self.toolTipCards, tssItem.avatar)
         ItemNr = ItemNr + 1
     end
 
     if teamSpecificStatsLogTable["WeldStruct"] then
-        tssItem = CreateTssItem(MarineItem.background, teamSpecificStatsLogTable["WeldStruct"], 0, "Repair Bot", nil, nil, ItemNr, "Most welding done on marine structures")
+        tssItem = CreateTssItem(MarineItem.background, teamSpecificStatsLogTable["WeldStruct"], 0, "Repair Bot", nil,
+            nil, ItemNr, "Most welding done on marine structures")
         table.insert(self.toolTipCards, tssItem.labelText)
         table.insert(self.toolTipCards, tssItem.avatar)
         ItemNr = ItemNr + 1
     end
 
     if teamSpecificStatsLogTable["MineDrops"] then
-        tssItem = CreateTssItem(MarineItem.background, teamSpecificStatsLogTable["MineDrops"], 0, "Mine Operator", nil, nil, ItemNr, "Most mines successfully placed")
+        tssItem = CreateTssItem(MarineItem.background, teamSpecificStatsLogTable["MineDrops"], 0, "Mine Operator", nil,
+            nil, ItemNr, "Most mines successfully placed")
         table.insert(self.toolTipCards, tssItem.labelText)
         table.insert(self.toolTipCards, tssItem.avatar)
         ItemNr = ItemNr + 1
     end
 
     if teamSpecificStatsLogTable["MarineMedsReceived"] then
-        tssItem = CreateTssItem(MarineItem.background, teamSpecificStatsLogTable["MarineMedsReceived"], 0, "High Maintenance", nil, nil, ItemNr, "Most medpacks received/picked up")
+        tssItem = CreateTssItem(MarineItem.background, teamSpecificStatsLogTable["MarineMedsReceived"], 0,
+            "High Maintenance", nil, nil, ItemNr, "Most medpacks received/picked up")
         table.insert(self.toolTipCards, tssItem.labelText)
         table.insert(self.toolTipCards, tssItem.avatar)
         ItemNr = ItemNr + 1
     end
 
     if teamSpecificStatsLogTable["marineRtDamage"] then
-        tssItem = CreateTssItem(MarineItem.background, teamSpecificStatsLogTable["marineRtDamage"], 0, "Node Clearer", nil, nil, ItemNr, "Amount of damage done to resource towers")
+        tssItem = CreateTssItem(MarineItem.background, teamSpecificStatsLogTable["marineRtDamage"], 0, "Node Clearer",
+            nil, nil, ItemNr, "Amount of damage done to resource towers")
         table.insert(self.toolTipCards, tssItem.labelText)
         table.insert(self.toolTipCards, tssItem.avatar)
         ItemNr = ItemNr + 1
@@ -3830,71 +3966,65 @@ end
 
 -- Todo: Split this monster into submethods
 function GUIGameEndStats:ProcessStats()
-    table.sort(
-        finalStatsTable,
-        function(a, b)
-            a.teamNumber = a.isMarine and 1 or 2
-            b.teamNumber = b.isMarine and 1 or 2
-            a.realAccuracy = a.accuracyOnos == -1 and a.accuracy or a.accuracyOnos
-            b.realAccuracy = b.accuracyOnos == -1 and b.accuracy or b.accuracyOnos
-            a.lowerCaseName = string.UTF8Lower(a.playerName)
-            b.lowerCaseName = string.UTF8Lower(b.playerName)
-            if a.teamNumber == b.teamNumber then
-                if a.kills == b.kills then
-                    if a.assists == b.assists then
-                        if a.deaths == b.deaths then
-                            if a.realAccuracy == b.realAccuracy then
-                                if a.pdmg == b.pdmg then
-                                    if a.sdmg == b.sdmg then
-                                        if a.minutesBuilding == b.minutesBuilding then
-                                            return a.lowerCaseName < b.lowerCaseName
-                                        else
-                                            return a.minutesBuilding > b.minutesBuilding
-                                        end
+    table.sort(finalStatsTable, function(a, b)
+        a.teamNumber = a.isMarine and 1 or 2
+        b.teamNumber = b.isMarine and 1 or 2
+        a.realAccuracy = a.accuracyOnos == -1 and a.accuracy or a.accuracyOnos
+        b.realAccuracy = b.accuracyOnos == -1 and b.accuracy or b.accuracyOnos
+        a.lowerCaseName = string.UTF8Lower(a.playerName)
+        b.lowerCaseName = string.UTF8Lower(b.playerName)
+        if a.teamNumber == b.teamNumber then
+            if a.kills == b.kills then
+                if a.assists == b.assists then
+                    if a.deaths == b.deaths then
+                        if a.realAccuracy == b.realAccuracy then
+                            if a.pdmg == b.pdmg then
+                                if a.sdmg == b.sdmg then
+                                    if a.minutesBuilding == b.minutesBuilding then
+                                        return a.lowerCaseName < b.lowerCaseName
                                     else
-                                        return a.sdmg > b.sdmg
+                                        return a.minutesBuilding > b.minutesBuilding
                                     end
                                 else
-                                    return a.pdmg > b.pdmg
+                                    return a.sdmg > b.sdmg
                                 end
                             else
-                                return a.accuracy > b.accuracy
+                                return a.pdmg > b.pdmg
                             end
                         else
-                            return a.deaths < b.deaths
+                            return a.accuracy > b.accuracy
                         end
                     else
-                        return a.assists > b.assists
+                        return a.deaths < b.deaths
                     end
                 else
-                    return a.kills > b.kills
+                    return a.assists > b.assists
                 end
             else
-                return a.teamNumber < b.teamNumber
+                return a.kills > b.kills
             end
+        else
+            return a.teamNumber < b.teamNumber
         end
-    )
+    end)
 
-    table.sort(
-        cardsTable,
-        function(a, b)
-            if a.order and b.order then
-                return a.order < b.order
-            elseif a.teamNumber == b.teamNumber then
-                if a.message.kills and b.message.kills then
-                    a.message.realAccuracy = a.message.accuracyOnos == -1 and a.message.accuracy or a.message.accuracyOnos
-                    b.message.realAccuracy = b.message.accuracyOnos == -1 and b.message.accuracy or b.message.accuracyOnos
-                    if a.message.kills == b.message.kills then
-                        return a.message.realAccuracy > b.message.realAccuracy
-                    else
-                        return a.message.kills > b.message.kills
-                    end
+    table.sort(cardsTable, function(a, b)
+        if a.order and b.order then
+            return a.order < b.order
+        elseif a.teamNumber == b.teamNumber then
+            if a.message.kills and b.message.kills then
+                a.message.realAccuracy = a.message.accuracyOnos == -1 and a.message.accuracy or a.message.accuracyOnos
+                b.message.realAccuracy = b.message.accuracyOnos == -1 and b.message.accuracy or b.message.accuracyOnos
+                if a.message.kills == b.message.kills then
+                    return a.message.realAccuracy > b.message.realAccuracy
+                else
+                    return a.message.kills > b.message.kills
                 end
-            else
-                return a.teamNumber < b.teamNumber
             end
+        else
+            return a.teamNumber < b.teamNumber
         end
-    )
+    end)
 
     local totalKills1 = 0
     local totalKills2 = 0
@@ -4001,27 +4131,16 @@ function GUIGameEndStats:ProcessStats()
             playerTextColor = kCurrentPlayerStatsTextColor
         end
 
-        local playerScoreboardRow =
-            CreateScoreboardRow(
-            teamObj.tableBackground,
-            bgColor,
-            playerTextColor,
-            message.playerName,
-            printNum(message.kills),
-            printNum(message.assists),
-            printNum(message.deaths),
-            message.accuracyOnos == -1 and string.format("%s%%", round(message.accuracy, 0)) or string.format("%s%% (%s%%)", round(message.accuracy, 0), round(message.accuracyOnos, 0)),
-            round(message.score, 0),
-            humanNumber(roundNumber(message.pdmg, 0)),
-            humanNumber(roundNumber(message.sdmg, 0)),
-            string.format("%d:%02d", minutes, seconds),
-            string.format("%d:%02d", pMinutes, pSeconds),
-            message.minutesComm > 0 and string.format("%d:%02d", cMinutes, cSeconds) or nil,
-            message.steamId,
-            message.isRookie,
-            message.hiveSkill
-        )
-        table.insert(self.toolTipCards, playerScoreboardRow.skillIcon) --mee
+        local playerScoreboardRow = CreateScoreboardRow(teamObj.tableBackground, bgColor, playerTextColor,
+            message.playerName, printNum(message.kills), printNum(message.assists), printNum(message.deaths),
+            message.accuracyOnos == -1 and string.format("%s%%", round(message.accuracy, 0)) or
+                string.format("%s%% (%s%%)", round(message.accuracy, 0), round(message.accuracyOnos, 0)),
+            round(message.score, 0), humanNumber(roundNumber(message.pdmg, 0)),
+            humanNumber(roundNumber(message.sdmg, 0)), string.format("%d:%02d", minutes, seconds),
+            string.format("%d:%02d", pMinutes, pSeconds), message.minutesComm > 0 and
+                string.format("%d:%02d", cMinutes, cSeconds) or nil, message.steamId, message.isRookie,
+            message.hiveSkill)
+        table.insert(self.toolTipCards, playerScoreboardRow.skillIcon) -- mee
         if message["accuracyFiltered"] and message["accuracyFiltered"] ~= "NaN" then
             playerScoreboardRow.acc.tooltip = message["accuracyFiltered"]
             table.insert(self.toolTipCards, playerScoreboardRow.acc)
@@ -4094,32 +4213,32 @@ function GUIGameEndStats:ProcessStats()
     -- When there's only one player in a team, the total and the average will be the same
     -- Don't even bother displaying this, it looks odd
     if numPlayers1 > 1 then
-        table.insert(self.team1UI.playerRows, CreateScoreboardRow(self.team1UI.tableBackground, kHeaderRowColor, kMarineHeaderRowTextColor, "Total", printNum(totalKills1), printNum(totalAssists1), printNum(totalDeaths1), " ", round(team1Score, 0), round(totalPdmg1, 0), round(totalSdmg1, 0), string.format("%d:%02d", minutes1, seconds1)))
-        table.insert(
-            self.team1UI.playerRows,
-            CreateScoreboardRow(
-                self.team1UI.tableBackground,
-                kAverageRowColor,
-                kAverageRowTextColor,
-                "Average",
-                round(totalKills1 / numPlayers1, 0),
-                round(totalAssists1 / numPlayers1, 0),
+        table.insert(self.team1UI.playerRows,
+            CreateScoreboardRow(self.team1UI.tableBackground, kHeaderRowColor, kMarineHeaderRowTextColor, "Total",
+                printNum(totalKills1), printNum(totalAssists1), printNum(totalDeaths1), " ", round(team1Score, 0),
+                round(totalPdmg1, 0), round(totalSdmg1, 0), string.format("%d:%02d", minutes1, seconds1)))
+        table.insert(self.team1UI.playerRows,
+            CreateScoreboardRow(self.team1UI.tableBackground, kAverageRowColor, kAverageRowTextColor, "Average",
+                round(totalKills1 / numPlayers1, 0), round(totalAssists1 / numPlayers1, 0),
                 round(totalDeaths1 / numPlayers1, 0),
-                avgAccuracy1Onos == -1 and string.format("%s%%", round(avgAccuracy1, 0)) or string.format("%s%% (%s%%)", round(avgAccuracy1, 0), round(avgAccuracy1Onos, 0)),
-                round(team1Score / numPlayers1, 0),
-                round(totalPdmg1 / numPlayers1, 0),
-                round(totalSdmg1 / numPlayers1, 0),
-                string.format("%d:%02d", minutes1Avg, seconds1Avg),
-                string.format("%d:%02d", minutes1PAvg, seconds1PAvg)
-            )
-        )
+                avgAccuracy1Onos == -1 and string.format("%s%%", round(avgAccuracy1, 0)) or
+                    string.format("%s%% (%s%%)", round(avgAccuracy1, 0), round(avgAccuracy1Onos, 0)),
+                round(team1Score / numPlayers1, 0), round(totalPdmg1 / numPlayers1, 0),
+                round(totalSdmg1 / numPlayers1, 0), string.format("%d:%02d", minutes1Avg, seconds1Avg),
+                string.format("%d:%02d", minutes1PAvg, seconds1PAvg)))
     end
     if numPlayers2 > 1 then
-        table.insert(self.team2UI.playerRows, CreateScoreboardRow(self.team2UI.tableBackground, kHeaderRowColor, kAlienHeaderRowTextColor, "Total", printNum(totalKills2), printNum(totalAssists2), printNum(totalDeaths2), " ", round(team2Score, 0), round(totalPdmg2, 0), round(totalSdmg2, 0), string.format("%d:%02d", minutes2, seconds2)))
-        table.insert(
-            self.team2UI.playerRows,
-            CreateScoreboardRow(self.team2UI.tableBackground, kAverageRowColor, kAverageRowTextColor, "Average", round(totalKills2 / numPlayers2, 0), round(totalAssists2 / numPlayers2, 0), round(totalDeaths2 / numPlayers2, 0), string.format("%s%%", round(avgAccuracy2, 0)), round(team2Score / numPlayers2, 0), round(totalPdmg2 / numPlayers2, 0), round(totalSdmg2 / numPlayers2, 0), string.format("%d:%02d", minutes2Avg, seconds2Avg), string.format("%d:%02d", minutes2PAvg, seconds2PAvg))
-        )
+        table.insert(self.team2UI.playerRows,
+            CreateScoreboardRow(self.team2UI.tableBackground, kHeaderRowColor, kAlienHeaderRowTextColor, "Total",
+                printNum(totalKills2), printNum(totalAssists2), printNum(totalDeaths2), " ", round(team2Score, 0),
+                round(totalPdmg2, 0), round(totalSdmg2, 0), string.format("%d:%02d", minutes2, seconds2)))
+        table.insert(self.team2UI.playerRows,
+            CreateScoreboardRow(self.team2UI.tableBackground, kAverageRowColor, kAverageRowTextColor, "Average",
+                round(totalKills2 / numPlayers2, 0), round(totalAssists2 / numPlayers2, 0),
+                round(totalDeaths2 / numPlayers2, 0), string.format("%s%%", round(avgAccuracy2, 0)),
+                round(team2Score / numPlayers2, 0), round(totalPdmg2 / numPlayers2, 0),
+                round(totalSdmg2 / numPlayers2, 0), string.format("%d:%02d", minutes2Avg, seconds2Avg),
+                string.format("%d:%02d", minutes2PAvg, seconds2PAvg)))
     end
 
     local gameInfo = GetGameInfoEntity()
@@ -4159,16 +4278,13 @@ function GUIGameEndStats:ProcessStats()
     end
 
     if #statusSummaryTable > 0 then
-        table.sort(
-            statusSummaryTable,
-            function(a, b)
-                if a.timeMinutes == b.timeMinutes then
-                    return a.className < b.className
-                else
-                    return a.timeMinutes > b.timeMinutes
-                end
+        table.sort(statusSummaryTable, function(a, b)
+            if a.timeMinutes == b.timeMinutes then
+                return a.className < b.className
+            else
+                return a.timeMinutes > b.timeMinutes
             end
-        )
+        end)
 
         local bgColor = kStatusStatsColor
         local statCard = self:CreateGraphicHeader("Class time distribution", bgColor)
@@ -4186,7 +4302,9 @@ function GUIGameEndStats:ProcessStats()
             local minutes = math.floor(row.timeMinutes)
             local seconds = (row.timeMinutes % 1) * 60
             local percentage = row.timeMinutes / totalTime * 100
-            table.insert(statCard.rows, CreateHeaderRow(statCard.tableBackground, bgColor, Color(1, 1, 1, 1), row.className, string.format("%d:%02d (%s%%)", minutes, seconds, round(percentage, 0))))
+            table.insert(statCard.rows,
+                CreateHeaderRow(statCard.tableBackground, bgColor, Color(1, 1, 1, 1), row.className,
+                    string.format("%d:%02d (%s%%)", minutes, seconds, round(percentage, 0))))
         end
         table.insert(self.statsCards, statCard)
     end
@@ -4201,7 +4319,8 @@ function GUIGameEndStats:ProcessStats()
         else
             bgColor = kCommanderStatsColor
         end
-        local statCard = self:CreateGraphicHeader(card.text, bgColor, card.logoTexture, card.logoCoords, card.logoSizeX, card.logoSizeY)
+        local statCard = self:CreateGraphicHeader(card.text, bgColor, card.logoTexture, card.logoCoords, card.logoSizeX,
+            card.logoSizeY)
         statCard.rows = {}
         statCard.teamNumber = card.teamNumber
 
@@ -4214,45 +4333,40 @@ function GUIGameEndStats:ProcessStats()
                 bgColor = ConditionalValue(index % 2 == 0, kCommanderStatsEvenColor, kCommanderStatsOddColor)
             end
 
-            table.insert(statCard.rows, CreateHeaderRow(statCard.tableBackground, bgColor, Color(1, 1, 1, 1), row.title, row.value))
+            table.insert(statCard.rows,
+                CreateHeaderRow(statCard.tableBackground, bgColor, Color(1, 1, 1, 1), row.title, row.value))
         end
         table.insert(self.statsCards, statCard)
     end
 
     if #techLogTable > 0 or #buildingSummaryTable > 0 then
-        table.sort(
-            techLogTable,
-            function(a, b)
-                if a.teamNumber == b.teamNumber then
-                    if a.finishedMinute == b.finishedMinute then
-                        return a.name > b.name
-                    else
-                        return a.finishedMinute < b.finishedMinute
-                    end
+        table.sort(techLogTable, function(a, b)
+            if a.teamNumber == b.teamNumber then
+                if a.finishedMinute == b.finishedMinute then
+                    return a.name > b.name
                 else
-                    return a.teamNumber < b.teamNumber
+                    return a.finishedMinute < b.finishedMinute
                 end
+            else
+                return a.teamNumber < b.teamNumber
             end
-        )
+        end)
 
-        table.sort(
-            buildingSummaryTable,
-            function(a, b)
-                if a.teamNumber == b.teamNumber then
-                    if a.built == b.built then
-                        if a.lost == b.lost then
-                            return a.techId < b.techId
-                        else
-                            return a.lost > b.lost
-                        end
+        table.sort(buildingSummaryTable, function(a, b)
+            if a.teamNumber == b.teamNumber then
+                if a.built == b.built then
+                    if a.lost == b.lost then
+                        return a.techId < b.techId
                     else
-                        return a.built > b.built
+                        return a.lost > b.lost
                     end
                 else
-                    return a.teamNumber < b.teamNumber
+                    return a.built > b.built
                 end
+            else
+                return a.teamNumber < b.teamNumber
             end
-        )
+        end)
 
         local team1Name = miscDataTable.team1Name or Locale.ResolveString("NAME_TEAM_1")
         local team2Name = miscDataTable.team2Name or Locale.ResolveString("NAME_TEAM_2")
@@ -4267,32 +4381,51 @@ function GUIGameEndStats:ProcessStats()
 
         -- Right now we only have marine comm stats so...
         if commanderStats then
-            table.insert(self.techLogs[1].rows, CreateCommStatsRow(self.techLogs[1].header.tableBackground, kHeaderRowColor, kMarineHeaderRowTextColor, "Commander Stats", "Acc.", "Effic.", "Refilled", "Picked", "Expired"))
+            table.insert(self.techLogs[1].rows,
+                CreateCommStatsRow(self.techLogs[1].header.tableBackground, kHeaderRowColor, kMarineHeaderRowTextColor,
+                    "Commander Stats", "Acc.", "Effic.", "Refilled", "Picked", "Expired"))
 
             local row = 1
 
             if commanderStats.medpackResUsed > 0 or commanderStats.medpackResExpired > 0 then
-                table.insert(self.techLogs[1].rows, CreateCommStatsRow(self.techLogs[1].header.tableBackground, row % 2 == 0 and kMarinePlayerStatsEvenColor or kMarinePlayerStatsOddColor, kMarineHeaderRowTextColor, "Medpacks", round(commanderStats.medpackAccuracy, 0) .. "%", round(commanderStats.medpackEfficiency, 0) .. "%", commanderStats.medpackRefill, commanderStats.medpackResUsed, commanderStats.medpackResExpired, kBuildMenuTexture, GetTextureCoordinatesForIcon(kTechId.MedPack), 24, 24, kIconColors[1]))
+                table.insert(self.techLogs[1].rows, CreateCommStatsRow(self.techLogs[1].header.tableBackground,
+                    row % 2 == 0 and kMarinePlayerStatsEvenColor or kMarinePlayerStatsOddColor,
+                    kMarineHeaderRowTextColor, "Medpacks", round(commanderStats.medpackAccuracy, 0) .. "%", round(
+                        commanderStats.medpackEfficiency, 0) .. "%", commanderStats.medpackRefill,
+                    commanderStats.medpackResUsed, commanderStats.medpackResExpired, kBuildMenuTexture,
+                    GetTextureCoordinatesForIcon(kTechId.MedPack), 24, 24, kIconColors[1]))
                 row = row + 1
             end
 
             if commanderStats.ammopackResUsed > 0 or commanderStats.ammopackResExpired > 0 then
-                table.insert(self.techLogs[1].rows, CreateCommStatsRow(self.techLogs[1].header.tableBackground, row % 2 == 0 and kMarinePlayerStatsEvenColor or kMarinePlayerStatsOddColor, kMarineHeaderRowTextColor, "Ammopacks", "-", round(commanderStats.ammopackEfficiency, 0) .. "%", commanderStats.ammopackRefill, commanderStats.ammopackResUsed, commanderStats.ammopackResExpired, kBuildMenuTexture, GetTextureCoordinatesForIcon(kTechId.AmmoPack), 24, 24, kIconColors[1]))
+                table.insert(self.techLogs[1].rows, CreateCommStatsRow(self.techLogs[1].header.tableBackground,
+                    row % 2 == 0 and kMarinePlayerStatsEvenColor or kMarinePlayerStatsOddColor,
+                    kMarineHeaderRowTextColor, "Ammopacks", "-", round(commanderStats.ammopackEfficiency, 0) .. "%",
+                    commanderStats.ammopackRefill, commanderStats.ammopackResUsed, commanderStats.ammopackResExpired,
+                    kBuildMenuTexture, GetTextureCoordinatesForIcon(kTechId.AmmoPack), 24, 24, kIconColors[1]))
                 row = row + 1
             end
 
             if commanderStats.catpackResUsed > 0 or commanderStats.catpackResExpired > 0 then
-                table.insert(self.techLogs[1].rows, CreateCommStatsRow(self.techLogs[1].header.tableBackground, row % 2 == 0 and kMarinePlayerStatsEvenColor or kMarinePlayerStatsOddColor, kMarineHeaderRowTextColor, "Catpacks", "-", round(commanderStats.catpackEfficiency, 0) .. "%", "-", commanderStats.catpackResUsed, commanderStats.catpackResExpired, kBuildMenuTexture, GetTextureCoordinatesForIcon(kTechId.CatPack), 24, 24, kIconColors[1]))
+                table.insert(self.techLogs[1].rows, CreateCommStatsRow(self.techLogs[1].header.tableBackground,
+                    row % 2 == 0 and kMarinePlayerStatsEvenColor or kMarinePlayerStatsOddColor,
+                    kMarineHeaderRowTextColor, "Catpacks", "-", round(commanderStats.catpackEfficiency, 0) .. "%", "-",
+                    commanderStats.catpackResUsed, commanderStats.catpackResExpired, kBuildMenuTexture,
+                    GetTextureCoordinatesForIcon(kTechId.CatPack), 24, 24, kIconColors[1]))
             end
         end
 
         if #buildingSummaryTable > 0 then
             if buildingSummaryTable[1].teamNumber == 1 then
-                table.insert(self.techLogs[1].rows, CreateTechLogRow(self.techLogs[1].header.tableBackground, kHeaderRowColor, kMarineHeaderRowTextColor, "", "Tech", "Built", "Lost"))
+                table.insert(self.techLogs[1].rows,
+                    CreateTechLogRow(self.techLogs[1].header.tableBackground, kHeaderRowColor,
+                        kMarineHeaderRowTextColor, "", "Tech", "Built", "Lost"))
             end
 
             if buildingSummaryTable[#buildingSummaryTable].teamNumber == 2 then
-                table.insert(self.techLogs[2].rows, CreateTechLogRow(self.techLogs[2].header.tableBackground, kHeaderRowColor, kAlienHeaderRowTextColor, "", "Tech", "Built", "Lost"))
+                table.insert(self.techLogs[2].rows,
+                    CreateTechLogRow(self.techLogs[2].header.tableBackground, kHeaderRowColor, kAlienHeaderRowTextColor,
+                        "", "Tech", "Built", "Lost"))
             end
 
             for index, buildingEntry in ipairs(buildingSummaryTable) do
@@ -4304,17 +4437,25 @@ function GUIGameEndStats:ProcessStats()
                     bgColor = isMarine and kMarinePlayerStatsEvenColor or kAlienPlayerStatsEvenColor
                 end
 
-                table.insert(self.techLogs[buildingEntry.teamNumber].rows, CreateTechLogRow(self.techLogs[buildingEntry.teamNumber].header.tableBackground, bgColor, rowTextColor, "", buildingEntry.name, buildingEntry.built, buildingEntry.lost, buildingEntry.iconTexture, buildingEntry.iconCoords, buildingEntry.iconSizeX, buildingEntry.iconSizeY, logoColor))
+                table.insert(self.techLogs[buildingEntry.teamNumber].rows,
+                    CreateTechLogRow(self.techLogs[buildingEntry.teamNumber].header.tableBackground, bgColor,
+                        rowTextColor, "", buildingEntry.name, buildingEntry.built, buildingEntry.lost,
+                        buildingEntry.iconTexture, buildingEntry.iconCoords, buildingEntry.iconSizeX,
+                        buildingEntry.iconSizeY, logoColor))
             end
         end
 
         if #techLogTable > 0 then
             if techLogTable[1].teamNumber == 1 then
-                table.insert(self.techLogs[1].rows, CreateTechLogRow(self.techLogs[1].header.tableBackground, kHeaderRowColor, kMarineHeaderRowTextColor, "Time", "Tech", "RTs", "Res"))
+                table.insert(self.techLogs[1].rows,
+                    CreateTechLogRow(self.techLogs[1].header.tableBackground, kHeaderRowColor,
+                        kMarineHeaderRowTextColor, "Time", "Tech", "RTs", "Res"))
             end
 
             if techLogTable[#techLogTable].teamNumber == 2 then
-                table.insert(self.techLogs[2].rows, CreateTechLogRow(self.techLogs[2].header.tableBackground, kHeaderRowColor, kAlienHeaderRowTextColor, "Time", "Tech", "RTs", "Res"))
+                table.insert(self.techLogs[2].rows,
+                    CreateTechLogRow(self.techLogs[2].header.tableBackground, kHeaderRowColor, kAlienHeaderRowTextColor,
+                        "Time", "Tech", "RTs", "Res"))
             end
 
             for index, techLogEntry in ipairs(techLogTable) do
@@ -4322,24 +4463,27 @@ function GUIGameEndStats:ProcessStats()
                 local isLost = techLogEntry.destroyed == true
                 local rowTextColor = isMarine and kMarineHeaderRowTextColor or kAlienHeaderRowTextColor
                 local logoColor = kIconColors[techLogEntry.teamNumber]
-                local bgColor = isLost and kLostTechOddColor or isMarine and kMarinePlayerStatsOddColor or kAlienPlayerStatsOddColor
+                local bgColor = isLost and kLostTechOddColor or isMarine and kMarinePlayerStatsOddColor or
+                                    kAlienPlayerStatsOddColor
                 if index % 2 == 0 then
-                    bgColor = isLost and kLostTechEvenColor or isMarine and kMarinePlayerStatsEvenColor or kAlienPlayerStatsEvenColor
+                    bgColor = isLost and kLostTechEvenColor or isMarine and kMarinePlayerStatsEvenColor or
+                                  kAlienPlayerStatsEvenColor
                 end
 
-                table.insert(self.techLogs[techLogEntry.teamNumber].rows, CreateTechLogRow(self.techLogs[techLogEntry.teamNumber].header.tableBackground, bgColor, rowTextColor, techLogEntry.finishedTime, techLogEntry.name, techLogEntry.activeRTs, techLogEntry.teamRes, techLogEntry.iconTexture, techLogEntry.iconCoords, techLogEntry.iconSizeX, techLogEntry.iconSizeY, logoColor))
+                table.insert(self.techLogs[techLogEntry.teamNumber].rows,
+                    CreateTechLogRow(self.techLogs[techLogEntry.teamNumber].header.tableBackground, bgColor,
+                        rowTextColor, techLogEntry.finishedTime, techLogEntry.name, techLogEntry.activeRTs,
+                        techLogEntry.teamRes, techLogEntry.iconTexture, techLogEntry.iconCoords, techLogEntry.iconSizeX,
+                        techLogEntry.iconSizeY, logoColor))
             end
         end
     end
 
     self.hiveSkillGraphs = {}
     if #hiveSkillGraphTable > 0 then
-        table.sort(
-            hiveSkillGraphTable,
-            function(a, b)
-                return a.gameMinute < b.gameMinute
-            end
-        )
+        table.sort(hiveSkillGraphTable, function(a, b)
+            return a.gameMinute < b.gameMinute
+        end)
 
         self.hiveSkillGraphs[1] = {}
         self.hiveSkillGraphs[2] = {}
@@ -4425,7 +4569,8 @@ function GUIGameEndStats:ProcessStats()
                 end
                 players[teamNumber][id] = entry.joined
                 playerCount[teamNumber] = playerCount[teamNumber] + ConditionalValue(entry.joined, 1, -1)
-                hiveSkill[teamNumber] = hiveSkill[teamNumber] + ConditionalValue(entry.joined, playerSkill, -playerSkill)
+                hiveSkill[teamNumber] = hiveSkill[teamNumber] +
+                                            ConditionalValue(entry.joined, playerSkill, -playerSkill)
             end
         end
 
@@ -4449,12 +4594,9 @@ function GUIGameEndStats:ProcessStats()
 
     self.rtGraphs = {}
     if #rtGraphTable > 0 then
-        table.sort(
-            rtGraphTable,
-            function(a, b)
-                return a.gameMinute < b.gameMinute
-            end
-        )
+        table.sort(rtGraphTable, function(a, b)
+            return a.gameMinute < b.gameMinute
+        end)
 
         self.rtGraphs[1] = {}
         self.rtGraphs[2] = {}
@@ -4464,9 +4606,11 @@ function GUIGameEndStats:ProcessStats()
 
         for _, entry in ipairs(rtGraphTable) do
             local teamNumber = entry.teamNumber
-            table.insert(self.rtGraphs[teamNumber], Vector(entry.gameMinute * 60, rtCount[teamNumber] + lineOffset[teamNumber], 0))
+            table.insert(self.rtGraphs[teamNumber],
+                Vector(entry.gameMinute * 60, rtCount[teamNumber] + lineOffset[teamNumber], 0))
             rtCount[teamNumber] = rtCount[teamNumber] + ConditionalValue(entry.destroyed, -1, 1)
-            table.insert(self.rtGraphs[teamNumber], Vector(entry.gameMinute * 60, rtCount[teamNumber] + lineOffset[teamNumber], 0))
+            table.insert(self.rtGraphs[teamNumber],
+                Vector(entry.gameMinute * 60, rtCount[teamNumber] + lineOffset[teamNumber], 0))
             maxRTs = math.max(maxRTs, rtCount[teamNumber])
         end
 
@@ -4482,7 +4626,10 @@ function GUIGameEndStats:ProcessStats()
         self.builtRTsComp:SetValues(miscDataTable.marineRTsBuilt, miscDataTable.alienRTsBuilt)
         self.lostRTsComp:SetValues(miscDataTable.marineRTsLost, miscDataTable.alienRTsLost)
 
-        --Logic to get lost unbuilt RT's
+        local marineAvgRTs, alienAvgRTs = CalculateAverageRTs(rtGraphTable, miscDataTable.gameLengthMinutes)
+        self.avgRTsComp:SetValues(roundNumber(marineAvgRTs, 2), roundNumber(alienAvgRTs, 2))
+
+        -- Logic to get lost unbuilt RT's
         local marineRTsLostUnbuilt = miscDataTable.marineRTsLost
         local alienRTsLostUnbuilt = miscDataTable.alienRTsLost
         for _, entry in ipairs(rtGraphTable) do
@@ -4496,13 +4643,18 @@ function GUIGameEndStats:ProcessStats()
         end
         local rtLabelText = ""
         if miscDataTable.marineRTsBuilt > 0 then
-            self.builtRTsComp:SetLeftText("(" .. round(miscDataTable.marineRTsBuilt / miscDataTable.gameLengthMinutes, 1) .. "/min)  " .. tostring(miscDataTable.marineRTsBuilt))
+            self.builtRTsComp:SetLeftText("(" ..
+                                              round(miscDataTable.marineRTsBuilt / miscDataTable.gameLengthMinutes, 1) ..
+                                              "/min)  " .. tostring(miscDataTable.marineRTsBuilt))
         end
         if miscDataTable.alienRTsBuilt > 0 then
-            self.builtRTsComp:SetRightText(tostring(miscDataTable.alienRTsBuilt) .. "  (" .. round(miscDataTable.alienRTsBuilt / miscDataTable.gameLengthMinutes, 1) .. "/min)")
+            self.builtRTsComp:SetRightText(tostring(miscDataTable.alienRTsBuilt) .. "  (" ..
+                                               round(miscDataTable.alienRTsBuilt / miscDataTable.gameLengthMinutes, 1) ..
+                                               "/min)")
         end
         if miscDataTable.marineRTsLost > 0 then
-            rtLabelText = "(" .. round(miscDataTable.marineRTsLost / miscDataTable.gameLengthMinutes, 1) .. "/min)  " .. tostring(miscDataTable.marineRTsLost)
+            rtLabelText = "(" .. round(miscDataTable.marineRTsLost / miscDataTable.gameLengthMinutes, 1) .. "/min)  " ..
+                              tostring(miscDataTable.marineRTsLost)
             if marineRTsLostUnbuilt > 0 then
                 self.lostRTsComp:SetLeftText(rtLabelText .. " (" .. tostring(marineRTsLostUnbuilt) .. " Unbuilt)")
             else
@@ -4510,7 +4662,8 @@ function GUIGameEndStats:ProcessStats()
             end
         end
         if miscDataTable.alienRTsLost > 0 then
-            rtLabelText = tostring(miscDataTable.alienRTsLost) .. "  (" .. round(miscDataTable.alienRTsLost / miscDataTable.gameLengthMinutes, 1) .. "/min)"
+            rtLabelText = tostring(miscDataTable.alienRTsLost) .. "  (" ..
+                              round(miscDataTable.alienRTsLost / miscDataTable.gameLengthMinutes, 1) .. "/min)"
             if alienRTsLostUnbuilt > 0 then
                 self.lostRTsComp:SetRightText(rtLabelText .. " (" .. tostring(alienRTsLostUnbuilt) .. " Unbuilt)")
             else
@@ -4521,12 +4674,9 @@ function GUIGameEndStats:ProcessStats()
 
     self.killGraphs = {}
     if #killGraphTable > 0 then
-        table.sort(
-            killGraphTable,
-            function(a, b)
-                return a.gameMinute < b.gameMinute
-            end
-        )
+        table.sort(killGraphTable, function(a, b)
+            return a.gameMinute < b.gameMinute
+        end)
 
         self.killGraphs[1] = {}
         self.killGraphs[2] = {}
@@ -4535,9 +4685,11 @@ function GUIGameEndStats:ProcessStats()
 
         for _, entry in ipairs(killGraphTable) do
             local teamNumber = entry.teamNumber
-            table.insert(self.killGraphs[teamNumber], Vector(entry.gameMinute * 60, teamKills[teamNumber] + lineOffsets[teamNumber], 0))
+            table.insert(self.killGraphs[teamNumber],
+                Vector(entry.gameMinute * 60, teamKills[teamNumber] + lineOffsets[teamNumber], 0))
             teamKills[teamNumber] = teamKills[teamNumber] + 1
-            table.insert(self.killGraphs[teamNumber], Vector(entry.gameMinute * 60, teamKills[teamNumber] + lineOffsets[teamNumber], 0))
+            table.insert(self.killGraphs[teamNumber],
+                Vector(entry.gameMinute * 60, teamKills[teamNumber] + lineOffsets[teamNumber], 0))
         end
 
         self.killGraph:SetPoints(1, self.killGraphs[1])
@@ -4555,10 +4707,12 @@ function GUIGameEndStats:ProcessStats()
         self.killComparison:SetValues(teamKills[1], teamKills[2])
 
         if teamKills[1] > 0 then
-            self.killComparison:SetLeftText("(" .. round(teamKills[1] / miscDataTable.gameLengthMinutes, 1) .. "/min)  " .. tostring(teamKills[1]))
+            self.killComparison:SetLeftText(
+                "(" .. round(teamKills[1] / miscDataTable.gameLengthMinutes, 1) .. "/min)  " .. tostring(teamKills[1]))
         end
         if teamKills[2] > 0 then
-            self.killComparison:SetRightText(tostring(teamKills[2]) .. "  (" .. round(teamKills[2] / miscDataTable.gameLengthMinutes, 1) .. "/min)")
+            self.killComparison:SetRightText(tostring(teamKills[2]) .. "  (" ..
+                                                 round(teamKills[2] / miscDataTable.gameLengthMinutes, 1) .. "/min)")
         end
     end
 
@@ -4587,7 +4741,6 @@ function GUIGameEndStats:ProcessStats()
 		end
 	end
 	]]
-
 
     -- commented out for LessNetworkData
     --[[
@@ -4711,6 +4864,55 @@ function GUIGameEndStats:ProcessStats()
     -- presGraphTableMarines = {}
 end
 
+function CalculateAverageRTs(rtGraphTable, gameLengthMinutes)
+    local teamRTs = {
+        [1] = 0,
+        [2] = 0
+    } -- Track total RTs for each team
+    local lastRTCount = {
+        [1] = 0,
+        [2] = 0
+    } -- Track last known RT count for each team
+    local lastTimeStamp = {
+        [1] = 0,
+        [2] = 0
+    } -- Track last timestamp for each team
+
+    -- Sort entries by time
+    table.sort(rtGraphTable, function(a, b)
+        return a.gameMinute < b.gameMinute
+    end)
+
+    -- Calculate weighted average based on time periods
+    for _, entry in ipairs(rtGraphTable) do
+        local teamNumber = entry.teamNumber
+        local timeElapsed = entry.gameMinute - lastTimeStamp[teamNumber]
+
+        -- Add contribution of previous RT count for this time period
+        teamRTs[teamNumber] = teamRTs[teamNumber] + (lastRTCount[teamNumber] * timeElapsed)
+
+        -- Update RT count
+        if entry.destroyed then
+            lastRTCount[teamNumber] = lastRTCount[teamNumber] - 1
+        else
+            lastRTCount[teamNumber] = lastRTCount[teamNumber] + 1
+        end
+
+        lastTimeStamp[teamNumber] = entry.gameMinute
+    end
+
+    -- Add final contribution for remaining time
+    for team = 1, 2 do
+        local remainingTime = gameLengthMinutes - lastTimeStamp[team]
+        teamRTs[team] = teamRTs[team] + (lastRTCount[team] * remainingTime)
+
+        -- Calculate average by dividing by total game length
+        teamRTs[team] = teamRTs[team] / gameLengthMinutes
+    end
+
+    return teamRTs[1], teamRTs[2] -- Returns marine average, alien average
+end
+
 function GUIGameEndStats:Update()
     local timeSinceRoundEnd = lastStatsMsg > 0 and Shared.GetTime() - lastGameEnd or 0
     local gameInfo = GetGameInfoEntity()
@@ -4722,7 +4924,8 @@ function GUIGameEndStats:Update()
     end
 
     -- Enough time has passed, so let's process the stats we received
-    if Shared.GetTime() > lastStatsMsg + kMaxAppendTime and (#finalStatsTable > 0 or #cardsTable > 0 or #miscDataTable > 0) and gameInfo then
+    if Shared.GetTime() > lastStatsMsg + kMaxAppendTime and
+        (#finalStatsTable > 0 or #cardsTable > 0 or #miscDataTable > 0) and gameInfo then
         self:ProcessStats()
     end
 
@@ -4734,10 +4937,13 @@ function GUIGameEndStats:Update()
             self.actionIconGUI:Hide()
         end
 
-        local gameEndSummary = Client.shouldShowEndSummary or ClientUI.GetScript("GUIGameEndPage") and ClientUI.GetScript("GUIGameEndPage"):GetIsVisible()
-        local gameFeedback = Client.shouldShowFeedback or ClientUI.GetScript("GUIGameFeedback") and ClientUI.GetScript("GUIGameFeedback"):GetIsVisible()
+        local gameEndSummary = Client.shouldShowEndSummary or ClientUI.GetScript("GUIGameEndPage") and
+                                   ClientUI.GetScript("GUIGameEndPage"):GetIsVisible()
+        local gameFeedback = Client.shouldShowFeedback or ClientUI.GetScript("GUIGameFeedback") and
+                                 ClientUI.GetScript("GUIGameFeedback"):GetIsVisible()
 
-        if not gameEndSummary and not gameFeedback and timeSinceRoundEnd > 7.5 and lastGameEnd > 0 and not self.displayed then
+        if not gameEndSummary and not gameFeedback and timeSinceRoundEnd > 7.5 and lastGameEnd > 0 and
+            not self.displayed then
             self:SetIsVisible(gameInfo and gameInfo.showEndStatsAuto and GetAdvancedOption("deathstats") > 1)
             self.displayed = true
         end
@@ -4818,7 +5024,8 @@ local function CHUDSetWeaponStats(message)
         if kFriendlyWeaponNames[wTechId] then
             weaponName = kFriendlyWeaponNames[wTechId]
         else
-            local techdataName = LookupTechData(wTechId, kTechDataMapName) or Locale.ResolveString(LookupTechData(wTechId, kTechDataDisplayName, ""))
+            local techdataName = LookupTechData(wTechId, kTechDataMapName) or
+                                     Locale.ResolveString(LookupTechData(wTechId, kTechDataDisplayName, ""))
             weaponName = techdataName:gsub("^%l", string.upper)
         end
     else
@@ -5062,13 +5269,13 @@ local function CHUDEquipmentAndLifeformsLog(message)
 end
 
 local function CHUDTeamSpecificStatsLog(message)
-    --print("Got message: " .. dump(message))
+    -- print("Got message: " .. dump(message))
     if message and message.steamId then
         local entry = {}
         entry.steamId = message.steamId
         entry.techName = message.techName
         entry.value = message.value
-        --print("insert: " .. dump(message))
+        -- print("insert: " .. dump(message))
         if not teamSpecificStatsLogTable[message.techName] then
             teamSpecificStatsLogTable[message.techName] = {}
         end
@@ -5076,7 +5283,7 @@ local function CHUDTeamSpecificStatsLog(message)
             teamSpecificStatsLogTable[message.techName][message.steamId] = {}
         end
         teamSpecificStatsLogTable[message.techName][message.steamId] = message.value
-    --table.insert(teamSpecificStatsLogTable, entry)
+        -- table.insert(teamSpecificStatsLogTable, entry)
     end
 
     lastStatsMsg = Shared.GetTime()
@@ -5115,7 +5322,8 @@ local function CHUDSetTechLog(message)
             entry.name = string.format(Locale.ResolveString("UNBUILT_STRUCTURE"), entry.name)
         end
         if message.recycled == true then
-            local format_string = message.teamNumber == 2 and Locale.ResolveString("CONSUMED_STRUCTURE") or Locale.ResolveString("RECYCLED_STRUCTURE")
+            local format_string = message.teamNumber == 2 and Locale.ResolveString("CONSUMED_STRUCTURE") or
+                                      Locale.ResolveString("RECYCLED_STRUCTURE")
             entry.name = string.format(format_string, entry.name)
         end
 
@@ -5151,7 +5359,9 @@ local lastDisplayStatus = false
 local lastDown = 0
 local kKeyTapTiming = 0.2
 function GUIGameEndStats:SendKeyEvent(key, down)
-    if GetIsBinding(key, "RequestMenu") and GetAdvancedOption("deathstats") > 0 and (not GetGameStarted() or GetIsOnNeutralTeam()) and not ChatUI_EnteringChatMessage() and not MainMenu_GetIsOpened() and self.prevRequestKey ~= down then
+    if GetIsBinding(key, "RequestMenu") and GetAdvancedOption("deathstats") > 0 and
+        (not GetGameStarted() or GetIsOnNeutralTeam()) and not ChatUI_EnteringChatMessage() and
+        not MainMenu_GetIsOpened() and self.prevRequestKey ~= down then
         self.prevRequestKey = down
 
         if down then
@@ -5208,14 +5418,17 @@ function GUIGameEndStats:SendKeyEvent(key, down)
                 end
 
                 self.hoverMenu:AddButton(name, nameBgColor, nameBgColor, textColor)
-                self.hoverMenu:AddButton(Locale.ResolveString("SB_MENU_STEAM_PROFILE"), teamColorBg, teamColorHighlight, textColor, openSteamProf)
-                self.hoverMenu:AddButton("NS2Panel profile", teamColorBg, teamColorHighlight, textColor, openNs2PanelProf)
+                self.hoverMenu:AddButton(Locale.ResolveString("SB_MENU_STEAM_PROFILE"), teamColorBg, teamColorHighlight,
+                    textColor, openSteamProf)
+                self.hoverMenu:AddButton("NS2Panel profile", teamColorBg, teamColorHighlight, textColor,
+                    openNs2PanelProf)
 
                 StartSoundEffect(kButtonClickSound)
                 self.hoverMenu:Show()
 
                 return true
-            elseif self.lastRow and self.hoverMenu.background:GetIsVisible() and not GUIItemContainsPoint(self.hoverMenu.background, mouseX, mouseY) then
+            elseif self.lastRow and self.hoverMenu.background:GetIsVisible() and
+                not GUIItemContainsPoint(self.hoverMenu.background, mouseX, mouseY) then
                 self.hoverMenu:Hide()
             end
 
@@ -5237,7 +5450,8 @@ function GUIGameEndStats:SendKeyEvent(key, down)
                 end
 
                 StartSoundEffect(kButtonClickSound)
-                SortByColumn(self, highlightedFieldMarine, highlightedField, highlightedFieldMarine and lastSortedT1WasInv or lastSortedT2WasInv)
+                SortByColumn(self, highlightedFieldMarine, highlightedField,
+                    highlightedFieldMarine and lastSortedT1WasInv or lastSortedT2WasInv)
                 return true
             end
         end
@@ -5261,7 +5475,8 @@ function GUIGameEndStats:SendKeyEvent(key, down)
             self.mousePressed = down
             if down then
                 local mouseX, mouseY = Client.GetCursorPosScreen()
-                self.isDragging = GUIItemContainsPoint(self.sliderBarBg, mouseX, mouseY) or GUIItemContainsPoint(self.slider, mouseX, mouseY)
+                self.isDragging = GUIItemContainsPoint(self.sliderBarBg, mouseX, mouseY) or
+                                      GUIItemContainsPoint(self.slider, mouseX, mouseY)
                 return true
             end
         elseif key == InputKey.MouseWheelDown then
@@ -5333,7 +5548,6 @@ Client.HookNetworkMessage("TechLog", CHUDSetTechLog)
 Client.HookNetworkMessage("BuildingSummary", CHUDSetBuildingSummary)
 Client.HookNetworkMessage("EalStats", CHUDEquipmentAndLifeformsLog)
 Client.HookNetworkMessage("TeamSpecificStats", CHUDTeamSpecificStatsLog)
-
 
 -- commented out for LessNetworkData
 --[[

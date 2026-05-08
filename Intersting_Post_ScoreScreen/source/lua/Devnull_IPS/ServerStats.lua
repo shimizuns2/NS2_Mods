@@ -122,18 +122,22 @@ end
 Event.Hook("MapLoadEntity", OnMapLoadEntity)
 
 local function GetGameTime(inMinutes)
-	local gamerules = GetGamerules()
-	local gameTime
-	if gamerules then
-		gameTime = gamerules:GetGameTimeChanged()
-	end
+    -- Cache the gamerules result to avoid multiple function calls
+    local gamerules = GetGamerules()
+    -- Early return if no gamerules exist
+    if not gamerules then return nil end
 
-	if gameTime and inMinutes then
-		gameTime = gameTime / 60
-	end
+    -- Get the time directly
+    local gameTime = gamerules:GetGameTimeChanged()
 
-	return gameTime
+    -- Convert to minutes if needed and the time exists
+    if gameTime and inMinutes then
+        return gameTime / 60
+    end
+
+    return gameTime
 end
+
 
 function StatsUI_AddExportBuilding(teamNumber, techId, entityId, location, lifecycle, isBuilt, extraInfo)
 	table.insert(
